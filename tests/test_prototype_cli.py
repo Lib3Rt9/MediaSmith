@@ -116,7 +116,9 @@ def test_missing_input_is_skipped_and_logged_with_setup(
     log = (tmp_path / prototype.DEFAULT_LOG_NAME).read_text(encoding="utf-8")
     assert f"{missing}: not found or not a file/folder" in log
     assert "format=jpg max-edge=2560 quality=88 convert-only=True" in log
-    assert f"Input   : {missing}, {src}" in log
+    assert "Input files : missing, valid.png" in log
+    assert "Input folders: None" in log
+    assert "exclude=None" in log
     assert f"Skipping missing or invalid input: {missing}" in capsys.readouterr().out
 
 
@@ -223,6 +225,28 @@ def test_input_and_all_can_be_combined(prototype, tmp_path, monkeypatch):
     assert (output / "selected" / "folder.jpg").is_file()
     assert (output / "specific.jpg").is_file()
     assert (output / "beside_script.jpg").is_file()
+    log = (tmp_path / prototype.DEFAULT_LOG_NAME).read_text(encoding="utf-8")
+    assert "Input files : specific.png, beside_script.png" in log
+    assert "Input folders: selected" in log
+
+
+def test_duplicate_inputs_are_deduplicated_and_exclusions_are_described(
+    prototype, tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    image = tmp_path / "photo.png"
+    Image.new("RGB", (20, 20), (20, 30, 40)).save(image)
+    monkeypatch.setattr(sys, "argv", [
+        "mediasmith.py", "-i", str(image), "--all", "--output", "processed",
+        "--exclude", "skip.png", "--convert-only",
+    ])
+
+    assert prototype.main() == 0
+
+    log = (tmp_path / prototype.DEFAULT_LOG_NAME).read_text(encoding="utf-8")
+    assert "Input files : photo.png" in log
+    assert "Input folders: None" in log
+    assert "exclude=[file/folder name] skip.png" in log
 
 
 def test_all_invalid_inputs_are_logged_without_creating_output(
