@@ -312,10 +312,32 @@ def failure_lines(results: List[FileResult]) -> List[str]:
     ]
 
 
+def describe_path_name(path: Path) -> str:
+    if path.is_dir():
+        kind = "folder"
+    elif path.is_file():
+        kind = "file"
+    else:
+        kind = "path"
+    return f"[{kind}] {path.name or path}"
+
+
+def describe_exclusion(path: Path, script_dir: Path) -> str:
+    if len(path.parts) == 1:
+        return f"[file/folder name] {path.name or path}"
+    candidates = [path] if path.is_absolute() else [Path.cwd() / path, script_dir / path]
+    target = next((candidate for candidate in candidates
+                   if candidate.is_file() or candidate.is_dir()), None)
+    if target is not None:
+        return describe_path_name(target)
+    return f"[path] {path.name or path}"
+
+
 def write_log(log_path: Path, args: argparse.Namespace, input_paths: List[Path],
               skipped_inputs: List[str], empty_directories: List[Path],
               skipped_directories: List[Path], dst_dir: Path, output_created: bool,
-              results: List[FileResult], started: datetime, interrupted: bool) -> None:
+              results: List[FileResult], started: datetime, interrupted: bool,
+              script_dir: Path) -> None:
     """Write each file result, the run summary, and every failure to the log file."""
     log_path.parent.mkdir(parents=True, exist_ok=True)
     finished = datetime.now()
@@ -325,11 +347,13 @@ def write_log(log_path: Path, args: argparse.Namespace, input_paths: List[Path],
         "Mediasmith log",
         f"Started : {started:%Y-%m-%d %H:%M:%S}",
         f"Finished: {finished:%Y-%m-%d %H:%M:%S}",
-        f"Input   : {', '.join(str(path) for path in input_paths)}",
+        f"Input files : {', '.join(path.name for path in input_paths if not path.is_dir()) or 'None'}",
+        f"Input folders: {', '.join(path.name for path in input_paths if path.is_dir()) or 'None'}",
         f"Output  : {dst_dir}" + ("" if output_created else " (not created)"),
         f"Setup   : format=jpg max-edge={args.max_edge} quality={args.quality} "
         f"convert-only={args.convert_only} recursive={args.recursive} "
-        f"copy-jpg={args.copy_jpg} exclude={','.join(str(path) for path in args.exclude)}",
+        f"copy-jpg={args.copy_jpg} exclude="
+        f"{', '.join(describe_exclusion(path, script_dir) for path in args.exclude) or 'None'}",
     ]
     if skipped_inputs:
         lines += ["", f"--- Skipped input paths ({len(skipped_inputs)}) ---"]
@@ -364,7 +388,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--all", action="store_true",
                    help="Also include images and folders beside this script")
     p.add_argument("--exclude", action="append", type=Path, default=[], metavar="PATH_OR_NAME",
-                   help="Exclude a file or folder by path or name; repeat as needed")
+                   help="Exclude exact paths (including folder contents) or every file/folder "
+                   "with a matching bare name; repeat as needed")
     p.add_argument("-o", "--output", dest="output_folder",
                    type=Path, default=Path("output"),
                    help="Output directory (default: output)")
@@ -415,9 +440,16 @@ def main() -> int:
         if not all_paths:
             skipped_inputs.append("--all: no image files or folders found beside the script")
 
-    input_paths = [path.resolve() for path in requested_paths]
-    valid_inputs: List[Tuple[Path, bool]] = []
+    input_paths: List[Path] = []
     seen_inputs: Set[Path] = set()
+    for path in requested_paths:
+        resolved_path = path.resolve()
+        if resolved_path in seen_inputs:
+            continue
+        seen_inputs.add(resolved_path)
+        input_paths.append(resolved_path)
+
+    valid_inputs: List[Tuple[Path, bool]] = []
 
     exclusion_paths = [path.resolve() if path.is_absolute()
                        else (Path.cwd() / path).resolve() for path in args.exclude]
@@ -437,9 +469,6 @@ def main() -> int:
         return False
 
     for resolved_path in input_paths:
-        if resolved_path in seen_inputs:
-            continue
-        seen_inputs.add(resolved_path)
         if is_excluded(resolved_path):
             skipped_inputs.append(f"{resolved_path}: excluded by --exclude")
             continue
@@ -469,7 +498,7 @@ def main() -> int:
         print("No valid inputs; output folder was not created.")
         try:
             write_log(log_path, args, input_paths, skipped_inputs, [], [],
-                      requested_dst, False, [], started, False)
+                      requested_dst, False, [], started, False, script_dir)
             print(f"Log written to: {log_path}")
         except OSError as e:
             print(f"Could not write log file {log_path}: {e}")
@@ -563,7 +592,8 @@ def main() -> int:
     try:
         write_log(log_path, args, input_paths, skipped_inputs,
                   sorted(empty_directories), sorted(skipped_directories),
-                  dst_dir, output_created, results, started, interrupted)
+                  dst_dir, output_created, results, started, interrupted,
+                  script_dir)
         print(f"\nLog written to: {log_path}")
     except OSError as e:
         print(f"\nCould not write log file {log_path}: {e}")
