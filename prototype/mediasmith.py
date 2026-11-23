@@ -16,19 +16,18 @@ What it does
                                        ALL existing JPGs untouched instead)
 - If the converted file would NOT be smaller than the original, the original is
   copied unchanged instead (no bigger files, no needless quality loss).
-- Output goes to a separate folder; the originals are never modified.
+- Output goes to an automatically indexed ``output`` folder in the current
+  working directory, with one sub-folder per input folder; originals are never modified.
 - Every file produces one result record. Failures are listed at the end of the run
-  and written, with the reason for each, to a log file (mediasmith.log, saved in the same
-  folder as this script; use --log FILE to choose another place).
+  and every per-file result is written to mediasmith.log beside this script.
 
 Requirements:  pip install pillow
 Optional (HEIC/HEIF input):  pip install pillow-heif
 
 Usage:
-    python mediasmith.py INPUT_FOLDER OUTPUT_FOLDER
-    python mediasmith.py INPUT_FOLDER OUTPUT_FOLDER --max-edge 1920 --recursive
-    python mediasmith.py INPUT_FOLDER OUTPUT_FOLDER --copy-jpg
-    python mediasmith.py INPUT_FOLDER OUTPUT_FOLDER --log errors.log
+    python mediasmith.py INPUT_FOLDER [INPUT_FOLDER ...]
+    python mediasmith.py INPUT_FOLDER ANOTHER_FOLDER --max-edge 1920 --recursive
+    python mediasmith.py INPUT_FOLDER --copy-jpg
 
 Exit codes: 0 = all fine, 1 = bad arguments, 2 = some files failed, 130 = interrupted.
 """
@@ -82,6 +81,7 @@ class FileResult:
     new_size: Optional[Tuple[int, int]] = None
     candidate_bytes: int = 0                    # size the rejected re-encode would have had
     error: Optional[str] = None
+    input_label: Optional[str] = None            # disambiguates files from multiple inputs
 
 
 # --------------------------------------------------------------------------- #
@@ -227,7 +227,8 @@ def process_file(src: Path, rel: Path, dst_dir: Path, max_edge: int,
         res.status = ERROR
         res.dst = None
         res.bytes_in = res.bytes_out = 0
-        res.error = f"{type(e).__name__}: {e}"
+        error_message = str(e).replace(repr(str(src)), "").rstrip()
+        res.error = f"{type(e).__name__}: {error_message}"
         return res
 
 
@@ -237,20 +238,21 @@ def process_file(src: Path, rel: Path, dst_dir: Path, max_edge: int,
 
 def describe(r: FileResult) -> str:
     """One console line per file."""
+    rel = f"{r.input_label}/{r.rel}" if r.input_label else str(r.rel)
     if r.status == COPIED:
         renamed = f" -> {r.dst.name}" if r.dst and r.dst.name != r.src.name else ""
-        return f"[COPY]    {r.rel}{renamed}"
+        return f"[COPY]    {rel}{renamed}"
     if r.status == KEPT_ORIGINAL:
-        return (f"[KEEP]    {r.rel}  new version would be bigger "
+        return (f"[KEEP]    {rel}  new version would be bigger "
                 f"({r.bytes_in / 1024:.0f} KB -> {r.candidate_bytes / 1024:.0f} KB), original copied")
     if r.status == CONVERTED:
         o, n = r.old_size, r.new_size
-        return (f"[CONVERT] {r.rel} -> {r.dst.name}  "
+        return (f"[CONVERT] {rel} -> {r.dst.name}  "
                 f"{o[0]}x{o[1]} -> {n[0]}x{n[1]}  "
                 f"({r.bytes_in / 1024:.0f} KB -> {r.bytes_out / 1024:.0f} KB)")
     if r.status == ERROR:
-        return f"[ERROR]   {r.rel}: {r.error}"
-    return f"[SKIP]    {r.rel}"
+        return f"[ERROR]   {rel}: {r.error}"
+    return f"[SKIP]    {rel}"
 
 
 def summarize(results: List[FileResult]) -> List[str]:
@@ -273,12 +275,15 @@ def summarize(results: List[FileResult]) -> List[str]:
 
 
 def failure_lines(results: List[FileResult]) -> List[str]:
-    return [f"  {r.rel}\n      reason: {r.error}" for r in results if r.status == ERROR]
+    return [
+        f"  {r.input_label + '/' if r.input_label else ''}{r.rel}\n      reason: {r.error}"
+        for r in results if r.status == ERROR
+    ]
 
 
-def write_log(log_path: Path, args: argparse.Namespace, src_dir: Path, dst_dir: Path,
+def write_log(log_path: Path, args: argparse.Namespace, src_dirs: List[Path], dst_dir: Path,
               results: List[FileResult], started: datetime, interrupted: bool) -> None:
-    """Write the run summary and every failure (with its reason) to the log file."""
+    """Write each file result, the run summary, and every failure to the log file."""
     log_path.parent.mkdir(parents=True, exist_ok=True)
     finished = datetime.now()
     failures = failure_lines(results)
@@ -287,14 +292,15 @@ def write_log(log_path: Path, args: argparse.Namespace, src_dir: Path, dst_dir: 
         "Mediasmith log",
         f"Started : {started:%Y-%m-%d %H:%M:%S}",
         f"Finished: {finished:%Y-%m-%d %H:%M:%S}",
-        f"Input   : {src_dir}",
+        f"Input   : {', '.join(str(src_dir) for src_dir in src_dirs)}",
         f"Output  : {dst_dir}",
         f"Options : max-edge={args.max_edge} quality={args.quality} "
         f"recursive={args.recursive} copy-jpg={args.copy_jpg}",
     ]
     if interrupted:
         lines.append("NOTE: run was interrupted (Ctrl-C); the list below is incomplete.")
-    lines += ["", "--- Summary ---", *summarize(results), ""]
+    lines += ["", "--- Files ---", *(describe(r) for r in results),
+              "", "--- Summary ---", *summarize(results), ""]
     if failures:
         lines.append(f"--- Failed files ({len(failures)}) ---")
         lines += failures
@@ -309,8 +315,7 @@ def write_log(log_path: Path, args: argparse.Namespace, src_dir: Path, dst_dir: 
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Resize + convert images to high-quality JPG.")
-    p.add_argument("input_folder", type=Path)
-    p.add_argument("output_folder", type=Path)
+    p.add_argument("input_folders", type=Path, nargs="+", metavar="INPUT_FOLDER")
     p.add_argument("--max-edge", type=int, default=2560,
                    help="Max length of the longer side in pixels (default 2560)")
     p.add_argument("--quality", type=int, default=95,
@@ -319,9 +324,6 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Also process sub-folders (structure is kept)")
     p.add_argument("--copy-jpg", action="store_true",
                    help="Copy ALL existing JPGs untouched, even if larger than --max-edge")
-    p.add_argument("--log", type=Path, default=None, metavar="FILE",
-                   help=f"Log file with the summary and every failure + reason "
-                        f"(default: {DEFAULT_LOG_NAME} in the same folder as this script)")
     return p
 
 
@@ -335,39 +337,45 @@ def main() -> int:
         print("--quality must be between 1 and 100.")
         return 1
 
-    src_dir = args.input_folder.resolve()
-    dst_dir = args.output_folder.resolve()
+    src_dirs = [path.resolve() for path in args.input_folders]
+    for src_dir in src_dirs:
+        if not src_dir.is_dir():
+            print(f"Input folder not found: {src_dir}")
+            return 1
 
-    if not src_dir.is_dir():
-        print(f"Input folder not found: {src_dir}")
-        return 1
-    if src_dir == dst_dir:
-        print("Output folder must be different from the input folder.")
-        return 1
+    dst_dir = unique_path(Path.cwd() / "output").resolve()
+    dst_dir.mkdir(parents=True)
+    input_outputs = []
+    for src_dir in src_dirs:
+        input_output = unique_path(dst_dir / (src_dir.name or "input"))
+        input_output.mkdir()
+        input_outputs.append(input_output)
 
-    dst_dir.mkdir(parents=True, exist_ok=True)
     # Default: next to this script (not inside the output folder)
-    log_path = (args.log or (Path(__file__).resolve().parent / DEFAULT_LOG_NAME)).resolve()
-
-    candidates = src_dir.rglob("*") if args.recursive else src_dir.iterdir()
-    files = sorted(f for f in candidates
-                   if f.is_file() and dst_dir not in f.parents and f != log_path)
+    log_path = (Path(__file__).resolve().parent / DEFAULT_LOG_NAME).resolve()
 
     started = datetime.now()
     results: List[FileResult] = []
     interrupted = False
 
     try:
-        for f in files:
-            res = process_file(f, f.relative_to(src_dir), dst_dir,
-                               args.max_edge, args.quality, args.copy_jpg)
-            results.append(res)
-            if res.status != SKIPPED:
-                print(describe(res))
+        for src_dir, input_output in zip(src_dirs, input_outputs):
+            candidates = src_dir.rglob("*") if args.recursive else src_dir.iterdir()
+            files = sorted(f for f in candidates
+                           if f.is_file() and dst_dir not in f.parents and f != log_path)
+            for f in files:
+                res = process_file(f, f.relative_to(src_dir), input_output,
+                                   args.max_edge, args.quality, args.copy_jpg)
+                if len(src_dirs) > 1:
+                    res.input_label = input_output.name
+                results.append(res)
+                if res.status != SKIPPED:
+                    print(describe(res))
     except KeyboardInterrupt:
         interrupted = True
         print("\nInterrupted - writing what was done so far.")
 
+    print(f"\nOutput folder: {dst_dir}")
     print("\n--- Done ---")
     for line in summarize(results):
         print(line)
@@ -379,7 +387,7 @@ def main() -> int:
             print(line)
 
     try:
-        write_log(log_path, args, src_dir, dst_dir, results, started, interrupted)
+        write_log(log_path, args, src_dirs, dst_dir, results, started, interrupted)
         print(f"\nLog written to: {log_path}")
     except OSError as e:
         print(f"\nCould not write log file {log_path}: {e}")
