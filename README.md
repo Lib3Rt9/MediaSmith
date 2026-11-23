@@ -1,0 +1,197 @@
+# MediaSmith
+
+A Python command-line tool (and library) that shrinks and converts big image collections (wallpapers, photos, digital art, scans) for archiving, while keeping visual quality as close to the original as possible.
+
+Today it handles images. Video and audio (via FFmpeg), AI upscaling and a desktop app are planned, see the [Roadmap](#roadmap).
+
+## Features
+
+- **Many input formats:** JPG, JPEG, JFIF, PNG, WebP, TIFF, BMP, GIF, AVIF, HEIC/HEIF (AVIF and HEIC need support installed, see below)
+- **Output formats:** JPG (default), PNG, WebP (lossy or lossless), AVIF
+- **High-quality JPG:** quality 95, 4:4:4 chroma (full colour detail), optimised encoding
+- **Resize modes:** longest edge, width, height or percentage. Nothing is ever enlarged unless you pass `--upscale`
+- **Target file size:** `--target-size 500KB` finds the highest quality that fits
+- **Keeps metadata** (EXIF + ICC colour profile) by default; `--strip-metadata` removes it (rotation is applied first, so photos don't turn sideways)
+- **Zero-loss copies:** a file already in the output format and within the size limit is copied byte for byte
+- **Never makes files bigger:** if the converted file would not be smaller, the original is copied instead
+- **Safe:** originals are never modified; everything goes to a separate output folder
+- **Rename templates:** `--rename "{parent}_{n:04d}"`
+- **`--dry-run`:** see exactly what would happen, including estimated sizes, without writing anything
+- **Parallel processing:** `--jobs 4`
+- **Resume:** `--resume` skips files already processed
+- **Failure log:** every failed file is listed with its reason, on screen and in a log file
+- **JSON / CSV report** of every file
+- **Progress bar** (with `tqdm`), **config file**, optional sub-folder recursion
+
+## Install
+
+Requires Python 3.8+.
+
+The canonical display name is `PROJECT_NAME` in `mediasmith/identity.py`; the CLI name
+and generated output filenames are derived from it in lowercase. Python packaging
+requires the distribution name and installed command to be declared in `pyproject.toml`,
+and the `mediasmith` import package is a compatibility-facing identifier. If you rebrand,
+update the `[project.scripts]` command there as well; the import package can stay unchanged.
+
+```bash
+pip install .                # from a clone of this repo
+pip install ".[all]"         # + HEIC input, AVIF output, progress bar
+```
+
+Optional extras: `heic` (pillow-heif), `avif` (pillow-avif-plugin; recent Pillow versions can write AVIF natively), `progress` (tqdm).
+
+Without installing you can also run it as a module from the repo folder: `python -m mediasmith ...`
+
+## Usage
+
+```bash
+mediasmith INPUT_FOLDER OUTPUT_FOLDER [options]
+```
+
+Put paths that contain spaces in quotes, for example `"D:\My Wallpapers"`.
+
+### Options
+
+| Option | Default | Description |
+|---|---|---|
+| `--max-edge PX` | 2560 | Longer side becomes at most PX pixels |
+| `--width PX` / `--height PX` | | Width / height becomes at most PX pixels |
+| `--scale PERCENT` | | Scale both sides (50 = half size) |
+| `--upscale` | off | Allow enlarging (needed for `--scale` above 100, or a larger `--max-edge` than the image) |
+| `--format jpg\|png\|webp\|avif` | jpg | Output format |
+| `--quality N` | 95 | Quality 1-100 for jpg / webp / avif |
+| `--lossless` | off | Lossless WebP |
+| `--target-size SIZE` | | Aim for at most SIZE (e.g. `500KB`, `2MB`) by lowering quality |
+| `--min-quality N` | 30 | Lowest quality `--target-size` may use |
+| `--strip-metadata` | off | Remove EXIF (ICC colour profile kept) |
+| `--strip-icc` | off | Also remove the ICC colour profile |
+| `--rename TEMPLATE` | | Rename outputs. Fields: `{name} {n} {date} {parent} {width} {height} {orig_ext} {format}` |
+| `--recursive` | off | Also process sub-folders, keeping the structure |
+| `--copy-same` (`--copy-jpg`) | off | Copy files already in the output format untouched, even if larger than the limit |
+| `--dry-run` | off | Show what would happen; write nothing |
+| `--resume` | off | Skip files already processed with the same options |
+| `--jobs N` | 1 | Worker threads (0 = all CPU cores) |
+| `--log FILE` | `mediasmith.log` in output | Log with summary and every failure + reason |
+| `--report FILE` | | Per-file report, `.json` or `.csv` |
+| `--config FILE` | | Read default options from a TOML or JSON file |
+| `--no-progress`, `--quiet` | | Hide the progress bar / per-file lines |
+
+Only one of `--max-edge`, `--width`, `--height`, `--scale` can be used at a time.
+
+### Examples
+
+```bash
+# Basic run: long edge 2560, JPG q95
+mediasmith ./wallpapers ./wallpapers_small
+
+# Half size, WebP, sub-folders, 4 threads
+mediasmith ./photos ./photos_small --scale 50 --format webp --recursive --jobs 4
+
+# Every file at most 500 KB, EXIF removed
+mediasmith ./photos ./web --target-size 500KB --strip-metadata
+
+# Preview first, then do it and keep a CSV report
+mediasmith ./photos ./out --dry-run
+mediasmith ./photos ./out --report ./out/report.csv
+
+# Large collection: safe to stop with Ctrl-C and continue later
+mediasmith ./photos ./out --recursive --jobs 0 --resume
+
+# Numbered names: wall_001.jpg, wall_002.jpg ...
+mediasmith ./photos ./out --rename "wall_{n:03d}"
+```
+
+### Config file
+
+Options can live in a TOML (or JSON) file. Keys are the long option names. Anything typed on the command line wins over the file.
+
+```toml
+# mediasmith.toml
+max-edge = 1920
+quality = 92
+format = "webp"
+recursive = true
+jobs = 4
+strip-metadata = true
+```
+
+```bash
+mediasmith ./photos ./out --config mediasmith.toml
+```
+
+TOML needs Python 3.11+ or `pip install tomli` (installed automatically with the package on older Pythons).
+
+### Resume
+
+Finished files are recorded in `.mediasmith-manifest.jsonl` inside the output folder, one line per file as soon as it is done. With `--resume` a file is skipped when its source is unchanged, it was processed with the same options, and its output still exists. Failed files are retried. If you change options, use a fresh output folder to avoid duplicates.
+
+### Reading the result
+
+- **Failures:** printed at the end with the reason, and written to the log. The exit code is `2` when any file failed (`0` = all fine, `1` = bad arguments, `130` = interrupted).
+- **Report:** JSON contains options, a summary and every file (status, sizes in bytes and pixels, quality, error). CSV contains one row per file.
+
+## How it works
+
+| Input | Result |
+|---|---|
+| Other format (PNG, WebP, TIFF, BMP, GIF, HEIC...) | Resized if needed and saved in the output format |
+| Already in the output format, within the size limit | Copied untouched |
+| Already in the output format, larger than the limit | Resized and re-saved (or copied with `--copy-same`) |
+| `.jfif` / `.jpe` | Same as JPG, saved with a `.jpg` extension |
+| Result not smaller than the original | Original copied instead |
+| Transparent image to JPG | Flattened onto white (PNG, WebP and AVIF keep transparency) |
+| Animated GIF / WebP | Only the first frame is converted |
+
+Resizing uses the Lanczos filter. Note that `--strip-metadata`, `--strip-icc` and `--target-size` always re-encode, so a JPG that would otherwise be copied untouched gets re-saved.
+
+## A note on quality
+
+JPEG, WebP lossy and AVIF are lossy formats, so converting from another format can never be truly lossless. JPG quality 95 with 4:4:4 chroma is visually indistinguishable from the original for most images and is a good balance for archiving. WebP lossy is limited to 4:2:0 chroma; JPG is the most compatible choice. Re-encoding an already low-quality JPG never improves it, which is why the tool keeps the original when the new file would be bigger. HEIC is supported as input only.
+
+## Library use
+
+```python
+from pathlib import Path
+from mediasmith.core import Context, Job, Options, PathReserver, process_file
+
+opts = Options(fmt="webp", resize_mode="width", resize_value=1920, quality=90)
+opts.validate()
+ctx = Context(dst_dir=Path("out"), opts=opts, reserver=PathReserver())
+result = process_file(Job(order=0, src=Path("a.png"), rel=Path("a.png"), number=1), ctx)
+print(result.status, result.dst, result.bytes_in, result.bytes_out, result.error)
+```
+
+## Development
+
+```bash
+pip install -e ".[dev,all]"
+pytest
+```
+
+## Roadmap
+
+- [x] Log file with every failed file and its reason
+- [x] Output formats: WebP, AVIF, PNG (HEIC output rejected: poor Windows/Android support)
+- [x] Resize by long edge, width, height or percentage, with optional upscaling
+- [x] Bulk rename with templates
+- [x] `--dry-run`
+- [x] Parallel processing
+- [x] Resume
+- [x] Target file size
+- [x] Strip metadata
+- [x] JSON / CSV report
+- [x] Progress bar
+- [x] Config file
+- [x] Unit tests and packaging
+- [ ] AI upscaling (Real-ESRGAN / waifu2x via ONNX Runtime, optional `[ai]` extra)
+- [ ] Video and audio conversion (FFmpeg)
+- [ ] Desktop app (Windows / Linux)
+- [ ] Rust core and Android app
+
+## Contributing
+
+Issues and pull requests are welcome.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
