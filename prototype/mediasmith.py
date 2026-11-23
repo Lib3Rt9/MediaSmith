@@ -25,9 +25,9 @@ Requirements:  pip install pillow
 Optional (HEIC/HEIF input):  pip install pillow-heif
 
 Usage:
-    python mediasmith.py INPUT_FOLDER [INPUT_FOLDER ...]
-    python mediasmith.py INPUT_FOLDER ANOTHER_FOLDER --max-edge 1920 --recursive
-    python mediasmith.py INPUT_FOLDER --copy-jpg
+    python mediasmith.py -i FOLDER IMAGE.png --all
+    python mediasmith.py --all -o processed
+    python mediasmith.py -i FOLDER --max-edge 1920 --recursive
 
 Exit codes: 0 = all fine, 1 = bad arguments, 2 = some files failed, 130 = interrupted.
 """
@@ -40,7 +40,7 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Set, Tuple
 
 from PIL import Image
 
@@ -116,7 +116,8 @@ def target_size(width: int, height: int, max_edge: int) -> Tuple[int, int]:
     return max(1, round(width * scale)), max(1, round(height * scale))
 
 
-def save_as_jpg(src: Path, dst: Path, max_edge: int, quality: int):
+def save_as_jpg(src: Path, dst: Path, max_edge: int, quality: int,
+                resize: bool = True):
     """Resize (if needed) and save as JPG. Returns (old_size, new_size) in pixels."""
     with Image.open(src) as img:
         icc_profile = img.info.get("icc_profile")
@@ -124,7 +125,7 @@ def save_as_jpg(src: Path, dst: Path, max_edge: int, quality: int):
         old_size = img.size
 
         rgb = to_rgb(img)
-        new_size = target_size(rgb.width, rgb.height, max_edge)
+        new_size = target_size(rgb.width, rgb.height, max_edge) if resize else rgb.size
         if new_size != rgb.size:
             rgb = rgb.resize(new_size, Image.LANCZOS)
 
@@ -156,6 +157,34 @@ def unique_path(path: Path) -> Path:
         i += 1
 
 
+def unique_directory(path: Path) -> Path:
+    """Append an index to an existing output directory name."""
+    if not path.exists():
+        return path
+    i = 1
+    while True:
+        candidate = path.with_name(f"{path.name}_{i}")
+        if not candidate.exists():
+            return candidate
+        i += 1
+
+
+def remove_empty_output_directories(root: Path) -> None:
+    """Remove output directories that contain no files."""
+    if not root.is_dir():
+        return
+    directories = sorted(
+        (path for path in root.rglob("*") if path.is_dir()),
+        key=lambda path: len(path.parts),
+        reverse=True,
+    )
+    for directory in directories:
+        if not any(directory.iterdir()):
+            directory.rmdir()
+    if not any(root.iterdir()):
+        root.rmdir()
+
+
 # --------------------------------------------------------------------------- #
 # Per-file processing
 # --------------------------------------------------------------------------- #
@@ -174,7 +203,7 @@ def copy_original(src: Path, out_dir: Path, res: FileResult, status: str) -> Fil
 
 
 def process_file(src: Path, rel: Path, dst_dir: Path, max_edge: int,
-                 quality: int, copy_jpg: bool) -> FileResult:
+                 quality: int, copy_jpg: bool, convert_only: bool = False) -> FileResult:
     """Handle one file and ALWAYS return a FileResult (never raises)."""
     res = FileResult(status=SKIPPED, src=src, rel=rel)
     ext = src.suffix.lower()
@@ -189,7 +218,7 @@ def process_file(src: Path, rel: Path, dst_dir: Path, max_edge: int,
         if ext in JPEG_EXTS:
             # Decide: copy untouched, or resize because it's too large
             needs_resize = False
-            if not copy_jpg:
+            if not copy_jpg and not convert_only:
                 with Image.open(src) as im:
                     res.old_size = im.size
                     needs_resize = max(im.size) > max_edge
@@ -199,11 +228,13 @@ def process_file(src: Path, rel: Path, dst_dir: Path, max_edge: int,
         # Convert / resize to JPG (same base name)
         target = unique_path(out_dir / (src.stem + ".jpg"))
         tmp = target.with_name(target.name + ".tmp")
-        res.old_size, res.new_size = save_as_jpg(src, tmp, max_edge, quality)
+        res.old_size, res.new_size = save_as_jpg(
+            src, tmp, max_edge, quality, resize=not convert_only
+        )
 
         # If the new file is not smaller than the original, keep the original
         # (copied untouched) instead of making a bigger file.
-        if tmp.stat().st_size >= src.stat().st_size:
+        if not convert_only and tmp.stat().st_size >= src.stat().st_size:
             res.candidate_bytes = tmp.stat().st_size
             tmp.unlink()
             tmp = None
@@ -281,7 +312,9 @@ def failure_lines(results: List[FileResult]) -> List[str]:
     ]
 
 
-def write_log(log_path: Path, args: argparse.Namespace, src_dirs: List[Path], dst_dir: Path,
+def write_log(log_path: Path, args: argparse.Namespace, input_paths: List[Path],
+              skipped_inputs: List[str], empty_directories: List[Path],
+              skipped_directories: List[Path], dst_dir: Path, output_created: bool,
               results: List[FileResult], started: datetime, interrupted: bool) -> None:
     """Write each file result, the run summary, and every failure to the log file."""
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -292,11 +325,21 @@ def write_log(log_path: Path, args: argparse.Namespace, src_dirs: List[Path], ds
         "Mediasmith log",
         f"Started : {started:%Y-%m-%d %H:%M:%S}",
         f"Finished: {finished:%Y-%m-%d %H:%M:%S}",
-        f"Input   : {', '.join(str(src_dir) for src_dir in src_dirs)}",
-        f"Output  : {dst_dir}",
-        f"Options : max-edge={args.max_edge} quality={args.quality} "
-        f"recursive={args.recursive} copy-jpg={args.copy_jpg}",
+        f"Input   : {', '.join(str(path) for path in input_paths)}",
+        f"Output  : {dst_dir}" + ("" if output_created else " (not created)"),
+        f"Setup   : format=jpg max-edge={args.max_edge} quality={args.quality} "
+        f"convert-only={args.convert_only} recursive={args.recursive} "
+        f"copy-jpg={args.copy_jpg} exclude={','.join(str(path) for path in args.exclude)}",
     ]
+    if skipped_inputs:
+        lines += ["", f"--- Skipped input paths ({len(skipped_inputs)}) ---"]
+        lines.extend(f"  {message}" for message in skipped_inputs)
+    if empty_directories:
+        lines += ["", f"--- Empty directories ({len(empty_directories)}) ---"]
+        lines.extend(f"  [EMPTY] {path}" for path in empty_directories)
+    if skipped_directories:
+        lines += ["", f"--- Directories with no output files ({len(skipped_directories)}) ---"]
+        lines.extend(f"  [SKIP DIR] {path}" for path in skipped_directories)
     if interrupted:
         lines.append("NOTE: run was interrupted (Ctrl-C); the list below is incomplete.")
     lines += ["", "--- Files ---", *(describe(r) for r in results),
@@ -314,8 +357,17 @@ def write_log(log_path: Path, args: argparse.Namespace, src_dirs: List[Path], ds
 # --------------------------------------------------------------------------- #
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Resize + convert images to high-quality JPG.")
-    p.add_argument("input_folders", type=Path, nargs="+", metavar="INPUT_FOLDER")
+    p = argparse.ArgumentParser(description="Convert selected images to JPG.")
+    p.add_argument("-i", "--input", dest="input_paths", type=Path, nargs="+",
+                   action="append", metavar="PATH",
+                   help="File(s) or folder(s); repeat -i to add more inputs")
+    p.add_argument("--all", action="store_true",
+                   help="Also include images and folders beside this script")
+    p.add_argument("--exclude", action="append", type=Path, default=[], metavar="PATH_OR_NAME",
+                   help="Exclude a file or folder by path or name; repeat as needed")
+    p.add_argument("-o", "--output", dest="output_folder",
+                   type=Path, default=Path("output"),
+                   help="Output directory (default: output)")
     p.add_argument("--max-edge", type=int, default=2560,
                    help="Max length of the longer side in pixels (default 2560)")
     p.add_argument("--quality", type=int, default=95,
@@ -324,11 +376,17 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Also process sub-folders (structure is kept)")
     p.add_argument("--copy-jpg", action="store_true",
                    help="Copy ALL existing JPGs untouched, even if larger than --max-edge")
+    p.add_argument("--convert-only", action="store_true",
+                   help="Convert to JPG without resizing; --quality still controls JPEG encoding")
     return p
 
 
 def main() -> int:
-    args = build_parser().parse_args()
+    parser = build_parser()
+    if len(sys.argv) == 1:
+        parser.print_help()
+        return 0
+    args = parser.parse_args()
 
     if args.max_edge < 1:
         print("--max-edge must be at least 1.")
@@ -336,46 +394,158 @@ def main() -> int:
     if not 1 <= args.quality <= 100:
         print("--quality must be between 1 and 100.")
         return 1
+    if not args.input_paths and not args.all:
+        parser.print_help()
+        return 0
 
-    src_dirs = [path.resolve() for path in args.input_folders]
-    for src_dir in src_dirs:
-        if not src_dir.is_dir():
-            print(f"Input folder not found: {src_dir}")
+    script_dir = Path(__file__).resolve().parent
+    requested_dst = args.output_folder.resolve()
+    if not args.output_folder.is_absolute():
+        requested_dst = (Path.cwd() / args.output_folder).resolve()
+
+    requested_paths = [path for group in (args.input_paths or []) for path in group]
+    skipped_inputs: List[str] = []
+    if args.all:
+        all_paths = [
+            path for path in sorted(script_dir.iterdir())
+            if path.is_dir() and path.resolve() != requested_dst
+            or path.is_file() and path.suffix.lower() in JPEG_EXTS | OTHER_EXTS
+        ]
+        requested_paths.extend(all_paths)
+        if not all_paths:
+            skipped_inputs.append("--all: no image files or folders found beside the script")
+
+    input_paths = [path.resolve() for path in requested_paths]
+    valid_inputs: List[Tuple[Path, bool]] = []
+    seen_inputs: Set[Path] = set()
+
+    exclusion_paths = [path.resolve() if path.is_absolute()
+                       else (Path.cwd() / path).resolve() for path in args.exclude]
+
+    def is_excluded(path: Path) -> bool:
+        resolved = path.resolve()
+        for exclusion, raw in zip(exclusion_paths, args.exclude):
+            if resolved == exclusion or exclusion in resolved.parents:
+                return True
+            if len(raw.parts) == 1 and any(
+                item.name == raw.name for item in (path, *path.parents)
+            ):
+                return True
+            script_relative = (script_dir / raw).resolve()
+            if resolved == script_relative or script_relative in resolved.parents:
+                return True
+        return False
+
+    for resolved_path in input_paths:
+        if resolved_path in seen_inputs:
+            continue
+        seen_inputs.add(resolved_path)
+        if is_excluded(resolved_path):
+            skipped_inputs.append(f"{resolved_path}: excluded by --exclude")
+            continue
+        if resolved_path.is_dir():
+            valid_inputs.append((resolved_path, True))
+        elif resolved_path.is_file() and resolved_path.suffix.lower() in JPEG_EXTS | OTHER_EXTS:
+            valid_inputs.append((resolved_path, False))
+        else:
+            if resolved_path.is_file():
+                message = f"{resolved_path}: not a supported image file"
+            else:
+                message = f"{resolved_path}: not found or not a file/folder"
+            if not resolved_path.exists():
+                print(f"Skipping missing or invalid input: {resolved_path}")
+            else:
+                print(f"Skipping invalid input: {message}")
+            skipped_inputs.append(message)
+
+    log_path = (script_dir / DEFAULT_LOG_NAME).resolve()
+    started = datetime.now()
+    for input_path, is_dir in valid_inputs:
+        if is_dir and (input_path == requested_dst or input_path in requested_dst.parents):
+            print("Output folder must not be inside an input folder.")
             return 1
 
-    dst_dir = unique_path(Path.cwd() / "output").resolve()
-    dst_dir.mkdir(parents=True)
-    input_outputs = []
-    for src_dir in src_dirs:
-        input_output = unique_path(dst_dir / (src_dir.name or "input"))
-        input_output.mkdir()
-        input_outputs.append(input_output)
+    if not valid_inputs:
+        print("No valid inputs; output folder was not created.")
+        try:
+            write_log(log_path, args, input_paths, skipped_inputs, [], [],
+                      requested_dst, False, [], started, False)
+            print(f"Log written to: {log_path}")
+        except OSError as e:
+            print(f"Could not write log file {log_path}: {e}")
+        return 1
 
-    # Default: next to this script (not inside the output folder)
-    log_path = (Path(__file__).resolve().parent / DEFAULT_LOG_NAME).resolve()
+    dst_dir = unique_directory(requested_dst)
+    input_outputs: List[Tuple[Path, bool, Path]] = []
+    reserved_output_dirs: Set[Path] = set()
+    for input_path, is_dir in valid_inputs:
+        if is_dir:
+            base = dst_dir / (input_path.name or "input")
+            input_output = base
+            index = 1
+            while input_output.exists() or input_output in reserved_output_dirs:
+                input_output = base.with_name(f"{base.name}_{index}")
+                index += 1
+            reserved_output_dirs.add(input_output)
+        else:
+            input_output = dst_dir
+        input_outputs.append((input_path, is_dir, input_output))
 
-    started = datetime.now()
     results: List[FileResult] = []
+    empty_directories: Set[Path] = set()
+    skipped_directories: Set[Path] = set()
     interrupted = False
 
     try:
-        for src_dir, input_output in zip(src_dirs, input_outputs):
-            candidates = src_dir.rglob("*") if args.recursive else src_dir.iterdir()
-            files = sorted(f for f in candidates
-                           if f.is_file() and dst_dir not in f.parents and f != log_path)
+        for input_path, is_dir, input_output in input_outputs:
+            if is_dir:
+                directories = [input_path]
+                directories.extend(sorted(path for path in input_path.rglob("*")
+                                         if path.is_dir() and dst_dir not in path.parents))
+                candidates = input_path.rglob("*") if args.recursive else input_path.iterdir()
+                files = sorted(f for f in candidates
+                               if f.is_file() and dst_dir not in f.parents and f != log_path
+                               and not is_excluded(f))
+            else:
+                files = [input_path]
+                directories = []
+
+            output_directories: Set[Path] = set()
             for f in files:
-                res = process_file(f, f.relative_to(src_dir), input_output,
-                                   args.max_edge, args.quality, args.copy_jpg)
-                if len(src_dirs) > 1:
-                    res.input_label = input_output.name
+                rel = f.relative_to(input_path) if is_dir else Path(f.name)
+                res = process_file(f, rel, input_output,
+                                   args.max_edge, args.quality, args.copy_jpg,
+                                   args.convert_only)
+                if len(valid_inputs) > 1:
+                    res.input_label = input_output.name if is_dir else input_path.name
                 results.append(res)
                 if res.status != SKIPPED:
                     print(describe(res))
+                if res.dst is not None and is_dir:
+                    directory = f.parent
+                    while directory == input_path or input_path in directory.parents:
+                        output_directories.add(directory)
+                        if directory == input_path:
+                            break
+                        directory = directory.parent
+
+            for directory in directories:
+                if is_excluded(directory) or directory in output_directories:
+                    continue
+                if any(directory.iterdir()):
+                    skipped_directories.add(directory)
+                else:
+                    empty_directories.add(directory)
     except KeyboardInterrupt:
         interrupted = True
         print("\nInterrupted - writing what was done so far.")
 
-    print(f"\nOutput folder: {dst_dir}")
+    remove_empty_output_directories(dst_dir)
+    output_created = dst_dir.is_dir()
+    if output_created:
+        print(f"\nOutput folder: {dst_dir}")
+    else:
+        print(f"\nOutput folder not created: {dst_dir}")
     print("\n--- Done ---")
     for line in summarize(results):
         print(line)
@@ -385,9 +555,15 @@ def main() -> int:
         print(f"\n--- Failed files ({len(failures)}) ---")
         for line in failures:
             print(line)
+    for directory in sorted(empty_directories):
+        print(f"[EMPTY] {directory}")
+    for directory in sorted(skipped_directories):
+        print(f"[SKIP DIR] {directory} (no output files)")
 
     try:
-        write_log(log_path, args, src_dirs, dst_dir, results, started, interrupted)
+        write_log(log_path, args, input_paths, skipped_inputs,
+                  sorted(empty_directories), sorted(skipped_directories),
+                  dst_dir, output_created, results, started, interrupted)
         print(f"\nLog written to: {log_path}")
     except OSError as e:
         print(f"\nCould not write log file {log_path}: {e}")
