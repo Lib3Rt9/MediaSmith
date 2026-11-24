@@ -201,23 +201,26 @@ pytest
 
 ## Roadmap
 
-- [x] Log file with every failed file and its reason
-- [x] Output formats: WebP, AVIF, PNG (HEIC output rejected: poor Windows/Android support)
-- [x] Resize by long edge, width, height or percentage, with optional upscaling
-- [x] Bulk rename with templates
-- [x] `--dry-run`
-- [x] Parallel processing
-- [x] Resume
-- [x] Target file size
-- [x] Strip metadata
-- [x] JSON / CSV report
-- [x] Progress bar
-- [x] Config file
-- [x] Unit tests and packaging
-- [ ] AI upscaling (Real-ESRGAN / waifu2x via ONNX Runtime, optional `[ai]` extra)
-- [ ] Video and audio conversion (FFmpeg)
-- [ ] Desktop app (Windows / Linux)
-- [ ] Rust core and Android app
+### Complete
+
+- [x] Core image conversion library
+- [x] Installable CLI
+- [x] Flexible file/folder inputs
+- [x] Resize, quality, format and target-size controls
+- [x] Dry-run, resume, parallel processing and reports
+- [x] Configuration, exclusions and rename templates
+- [x] Packaging and automated tests
+
+### Next
+
+- [ ] Public, stable Python library API
+- [ ] Improved error handling and recoverability
+- [ ] Thumbnail previews
+- [ ] Preserve directory metadata
+- [ ] Plugin or FFmpeg support for video and audio
+- [ ] Optional AI upscaling
+- [ ] Desktop GUI
+- [ ] Android app
 
 ## Contributing
 
