@@ -25,6 +25,7 @@ Requirements:  pip install pillow
 Optional (HEIC/HEIF input):  pip install pillow-heif
 
 Usage:
+    python mediasmith.py FOLDER IMAGE.png
     python mediasmith.py -i FOLDER IMAGE.png --all
     python mediasmith.py --all -o processed
     python mediasmith.py -i FOLDER --max-edge 1920 --recursive
@@ -382,6 +383,8 @@ def write_log(log_path: Path, args: argparse.Namespace, input_paths: List[Path],
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Convert selected images to JPG.")
+    p.add_argument("positional_paths", nargs="*", type=Path, metavar="PATH",
+                   help="File(s) or folder(s)")
     p.add_argument("-i", "--input", dest="input_paths", type=Path, nargs="+",
                    action="append", metavar="PATH",
                    help="File(s) or folder(s); repeat -i to add more inputs")
@@ -419,7 +422,7 @@ def main() -> int:
     if not 1 <= args.quality <= 100:
         print("--quality must be between 1 and 100.")
         return 1
-    if not args.input_paths and not args.all:
+    if not args.positional_paths and not args.input_paths and not args.all:
         parser.print_help()
         return 0
 
@@ -428,7 +431,12 @@ def main() -> int:
     if not args.output_folder.is_absolute():
         requested_dst = (Path.cwd() / args.output_folder).resolve()
 
-    requested_paths = [path for group in (args.input_paths or []) for path in group]
+    requested_paths = list(args.positional_paths)
+    requested_paths.extend(
+        path
+        for group in (args.input_paths or [])
+        for path in group
+    )
     skipped_inputs: List[str] = []
     if args.all:
         all_paths = [
