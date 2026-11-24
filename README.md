@@ -40,20 +40,44 @@ pip install ".[all]"         # + HEIC input, AVIF output, progress bar
 
 Optional extras: `heic` (pillow-heif), `avif` (pillow-avif-plugin; recent Pillow versions can write AVIF natively), `progress` (tqdm).
 
-Without installing you can also run it as a module from the repo folder: `python -m mediasmith ...`
+After installing, run `mediasmith ...`. From the repository folder you can also use
+`python -m mediasmith ...`; `python media ...` does not work because there is no `media.py`
+script. Start with `python -m mediasmith --help` to see all options.
 
 ## Usage
 
 ```bash
+# Existing two-path form: input folder, then output folder
 mediasmith INPUT_FOLDER OUTPUT_FOLDER [options]
+
+# Prototype-style form: one or more files/folders; default output is ./output
+mediasmith INPUT [INPUT ...] [options]
 ```
 
 Put paths that contain spaces in quotes, for example `"D:\My Wallpapers"`.
+The two-path form is kept for compatibility. To pass two inputs without ambiguity, use
+`-i INPUT -i INPUT` (or `-i INPUT1 INPUT2`) and set the output with `-o`.
+In this form each input folder gets its own output subfolder, while selected image files go
+directly into the output folder. Repeated runs use an indexed output folder (`output_1`, etc.);
+`--resume` reuses the requested output folder.
+
+From a clone, a basic run looks like this:
+
+```powershell
+python -m mediasmith "D:\Photos" "D:\Photos-small"
+# Or use the prototype-style defaults:
+python -m mediasmith "D:\Photos" --recursive
+```
 
 ### Options
 
 | Option | Default | Description |
 |---|---|---|
+| `PATH ...` | | Input files or folders. Exactly two positional paths without `-o` retain the legacy `INPUT_FOLDER OUTPUT_FOLDER` form |
+| `-i`, `--input PATH ...` | | Add input files or folders; repeat `-i` to add more |
+| `--all` | off | Also include images and folders in the current directory |
+| `-o`, `--output DIR` | `output` | Output directory for the flexible input form |
+| `--exclude PATH_OR_NAME` | | Exclude an exact path (including folder contents) or any matching file/folder name; repeat as needed |
 | `--max-edge PX` | 2560 | Longer side becomes at most PX pixels |
 | `--width PX` / `--height PX` | | Width / height becomes at most PX pixels |
 | `--scale PERCENT` | | Scale both sides (50 = half size) |
@@ -68,6 +92,7 @@ Put paths that contain spaces in quotes, for example `"D:\My Wallpapers"`.
 | `--rename TEMPLATE` | | Rename outputs. Fields: `{name} {n} {date} {parent} {width} {height} {orig_ext} {format}` |
 | `--recursive` | off | Also process sub-folders, keeping the structure |
 | `--copy-same` (`--copy-jpg`) | off | Copy files already in the output format untouched, even if larger than the limit |
+| `--convert-only` | off | Convert formats without resizing; `--quality` and `--target-size` still apply |
 | `--dry-run` | off | Show what would happen; write nothing |
 | `--resume` | off | Skip files already processed with the same options |
 | `--jobs N` | 1 | Worker threads (0 = all CPU cores) |
@@ -83,6 +108,12 @@ Only one of `--max-edge`, `--width`, `--height`, `--scale` can be used at a time
 ```bash
 # Basic run: long edge 2560, JPG q95
 mediasmith ./wallpapers ./wallpapers_small
+
+# Flexible inputs; each folder is kept separate under ./processed
+mediasmith -i ./wallpapers ./photos -o ./processed --recursive
+
+# Convert a single image without resizing
+mediasmith ./photo.png --output ./converted --convert-only
 
 # Half size, WebP, sub-folders, 4 threads
 mediasmith ./photos ./photos_small --scale 50 --format webp --recursive --jobs 4
