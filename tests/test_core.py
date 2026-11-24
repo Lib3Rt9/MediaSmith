@@ -56,8 +56,6 @@ def test_parse_size_rejects_garbage():
     dict(lossless=True),                                   # jpg + lossless
     dict(fmt="png", target_bytes=1000),                    # lossless format
     dict(fmt="webp", lossless=True, target_bytes=1000),
-    dict(rename="{nope}"),
-    dict(rename="{n:abc}"),
 ])
 def test_invalid_options(kwargs):
     with pytest.raises(ValueError):
@@ -90,7 +88,7 @@ def test_small_jpg_is_copied_byte_for_byte(tmp_path):
     assert res.dst.read_bytes() == src.read_bytes()
 
 
-def test_jfif_renamed_to_jpg(tmp_path):
+def test_jfif_extension_is_normalized_to_jpg(tmp_path):
     src = make_noise(tmp_path / "a.jfif", (100, 100), fmt="JPEG")
     res = run(src, tmp_path / "out")
     assert res.status == COPIED and res.dst.name == "a.jpg"
@@ -249,18 +247,11 @@ def test_exif_kept_by_default(tmp_path):
         assert im.getexif().get(0x010F) == "TestCam"
 
 
-def test_rename_template(tmp_path):
+def test_output_name_is_preserved(tmp_path):
     sub = tmp_path / "holiday"
     sub.mkdir()
     src = make_noise(sub / "IMG_1.png", (3000, 2000))
-    ctx = Context(dst_dir=tmp_path / "out", opts=Options(rename="{parent}_{n:03d}_{width}x{height}"),
-                  reserver=PathReserver())
+    ctx = Context(dst_dir=tmp_path / "out", opts=Options(), reserver=PathReserver())
     res = process_file(Job(0, src, Path("holiday/IMG_1.png"), 7), ctx)
-    assert res.dst.name == "holiday_007_2560x1707.jpg"
+    assert res.dst.name == "IMG_1.jpg"
     assert res.dst.parent.name == "holiday"
-
-
-def test_rename_strips_path_characters(tmp_path):
-    src = make_noise(tmp_path / "x.png", (3000, 2000))
-    res = run(src, tmp_path / "out", Options(rename="a/b:{name}"))
-    assert res.dst.name == "a_b_x.jpg"
