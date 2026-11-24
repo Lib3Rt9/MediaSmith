@@ -45,8 +45,10 @@ def test_multiple_inputs_use_indexed_output_and_log_file_results(
     output = tmp_path / "output"
     assert (output / "f1" / "f1.jpg").is_file()
     assert (output / "f2" / "f2.jpg").is_file()
-    log = (tmp_path / prototype.DEFAULT_LOG_NAME).read_text(encoding="utf-8")
+    log = (output / prototype.DEFAULT_LOG_NAME).read_text(encoding="utf-8")
     assert "--- Files ---" in log
+    assert "Output  : output\n" in log
+    assert str(tmp_path) not in log
     assert "[COPY]    f1/f1.jpg" in log
     assert "[COPY]    f2/f2.jpg" in log
     assert "[CONVERT] f1/noise.png -> noise.jpg  300x200 -> 100x67  (" in log
@@ -91,9 +93,11 @@ def test_custom_output_folder_name_and_conflict_index(
 
     assert run_cli(prototype, [src], monkeypatch, ["--output", "processed"]) == 0
     assert (tmp_path / "processed" / "pictures" / "photo.jpg").is_file()
+    assert (tmp_path / "processed" / prototype.DEFAULT_LOG_NAME).is_file()
 
     assert run_cli(prototype, [src], monkeypatch, ["-o", "processed"]) == 0
     assert (tmp_path / "processed_1" / "pictures" / "photo.jpg").is_file()
+    assert (tmp_path / "processed_1" / prototype.DEFAULT_LOG_NAME).is_file()
 
 
 def test_missing_input_is_skipped_and_logged_with_setup(
@@ -113,9 +117,11 @@ def test_missing_input_is_skipped_and_logged_with_setup(
     with Image.open(output / "valid.jpg") as converted:
         assert converted.size == (80, 60)
         assert converted.format == "JPEG"
-    log = (tmp_path / prototype.DEFAULT_LOG_NAME).read_text(encoding="utf-8")
+    log = (output / prototype.DEFAULT_LOG_NAME).read_text(encoding="utf-8")
     assert f"{missing}: not found or not a file/folder" in log
     assert "format=jpg max-edge=2560 quality=88 convert-only=True" in log
+    assert "Input folders: None\nRecursive: False\nOutput  : results\n" in log
+    assert "recursive=False" not in log
     assert "Input files : missing, valid.png" in log
     assert "Input folders: None" in log
     assert "exclude=None" in log
@@ -234,9 +240,10 @@ def test_all_folders_logs_empty_directories_and_skips_exclusions(
     assert not (output / "album" / "skip" / "photo.jpg").exists()
     assert not (output / "empty").exists()
     assert not (output / "album" / "skip").exists()
-    log = (tmp_path / prototype.DEFAULT_LOG_NAME).read_text(encoding="utf-8")
-    assert f"[EMPTY] {empty}" in log
-    assert f"[EMPTY] {album / 'skip'}" not in log
+    log = (output / prototype.DEFAULT_LOG_NAME).read_text(encoding="utf-8")
+    assert "[EMPTY] empty" in log
+    assert "[EMPTY] album/skip" not in log
+    assert "Input folders: album, empty\nRecursive: True\nOutput  : processed\n" in log
 
 
 def test_all_images_excludes_named_files(prototype, tmp_path, monkeypatch):
@@ -272,7 +279,7 @@ def test_input_and_all_can_be_combined(prototype, tmp_path, monkeypatch):
     assert (output / "selected" / "folder.jpg").is_file()
     assert (output / "specific.jpg").is_file()
     assert (output / "beside_script.jpg").is_file()
-    log = (tmp_path / prototype.DEFAULT_LOG_NAME).read_text(encoding="utf-8")
+    log = (output / prototype.DEFAULT_LOG_NAME).read_text(encoding="utf-8")
     assert "Input files : specific.png, beside_script.png" in log
     assert "Input folders: selected" in log
 
@@ -290,10 +297,42 @@ def test_duplicate_inputs_are_deduplicated_and_exclusions_are_described(
 
     assert prototype.main() == 0
 
-    log = (tmp_path / prototype.DEFAULT_LOG_NAME).read_text(encoding="utf-8")
+    output = tmp_path / "processed"
+    log = (output / prototype.DEFAULT_LOG_NAME).read_text(encoding="utf-8")
     assert "Input files : photo.png" in log
     assert "Input folders: None" in log
     assert "exclude=[file/folder name] skip.png" in log
+
+
+def test_recursive_parent_input_covers_child_folders_and_files(
+    prototype, tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    parent = tmp_path / "testpicture"
+    child = parent / "testpic"
+    child.mkdir(parents=True)
+    parent_image = parent / "parent.png"
+    child_image = child / "child.png"
+    Image.new("RGB", (20, 20), (20, 30, 40)).save(parent_image)
+    Image.new("RGB", (20, 20), (20, 30, 40)).save(child_image)
+
+    monkeypatch.setattr(sys, "argv", [
+        "mediasmith.py", str(parent), str(child), str(parent_image),
+        "--recursive", "--output", "processed", "--convert-only",
+    ])
+    assert prototype.main() == 0
+
+    output = tmp_path / "processed"
+    assert (output / "testpicture" / "parent.jpg").is_file()
+    assert (output / "testpicture" / "testpic" / "child.jpg").is_file()
+    assert not (output / "testpic" / "child.jpg").exists()
+    assert not (output / "parent.jpg").exists()
+
+    log = (output / prototype.DEFAULT_LOG_NAME).read_text(encoding="utf-8")
+    result_line = f"[CONVERT] {child_image.relative_to(parent)}"
+    assert log.count(result_line) == 1
+    assert f"{child}: already covered by input folder {parent}" in log
+    assert f"{parent_image}: already covered by input folder {parent}" in log
 
 
 def test_all_invalid_inputs_are_logged_without_creating_output(
@@ -327,4 +366,4 @@ def test_folder_with_no_output_files_is_logged_but_not_created(
 
     assert not (tmp_path / "output").exists()
     log = (tmp_path / prototype.DEFAULT_LOG_NAME).read_text(encoding="utf-8")
-    assert f"[SKIP DIR] {source}" in log
+    assert "[SKIP DIR] text-only" in log

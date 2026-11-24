@@ -146,6 +146,7 @@ def test_corrupt_file_is_an_error_not_a_crash(tmp_path):
     src.write_bytes(b"not a png")
     res = run(src, tmp_path / "out")
     assert res.status == ERROR and "UnidentifiedImageError" in res.error
+    assert str(src) not in res.error
     assert not (tmp_path / "out").exists() or not list((tmp_path / "out").iterdir())
 
 

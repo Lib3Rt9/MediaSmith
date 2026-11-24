@@ -45,7 +45,12 @@ def test_end_to_end_with_failure_log_and_reports(folders):
     assert "big.jpg" in names and "small.jpg" in names and "sub/deep.jpg" in names
     log = (dst / DEFAULT_LOG_NAME).read_text()
     assert log.startswith(f"{PROJECT_NAME} ")
+    assert "Recursive: True\n" in log
+    assert "recursive=True" not in log
     assert "Failed files (1)" in log and "bad.png" in log and "UnidentifiedImageError" in log
+    failure_details = log.split("--- Failed files", 1)[1]
+    assert str(src / "bad.png") not in failure_details
+    assert "cannot identify image file" in failure_details
     doc = json.loads((dst / "r.json").read_text())
     assert doc["summary"]["failed"] == 1 and doc["summary"]["converted"] == 2
     statuses = {f["relative_path"]: f["status"] for f in doc["files"]}
@@ -143,6 +148,93 @@ def test_width_option_and_conflict(folders, capsys):
         assert im.size == (1000, 667)
     with pytest.raises(SystemExit):   # argparse rejects two resize options
         main([str(src), str(dst), "--width", "10", "--height", "10"])
+
+
+def test_flexible_inputs_are_separated_and_indexed(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    Image.new("RGB", (20, 20), (20, 30, 40)).save(first / "one.png")
+    Image.new("RGB", (20, 20), (20, 30, 40)).save(second / "two.png")
+    Image.new("RGB", (20, 20), (20, 30, 40)).save(tmp_path / "loose.png")
+
+    args = ["-i", str(first), str(second), str(tmp_path / "loose.png"),
+            "-o", "processed", "--quiet"]
+    assert main(args) == 0
+    assert (tmp_path / "processed" / "first" / "one.png").is_file()
+    assert (tmp_path / "processed" / "second" / "two.png").is_file()
+    assert (tmp_path / "processed" / "loose.png").is_file()
+    log = (tmp_path / "processed" / DEFAULT_LOG_NAME).read_text(encoding="utf-8")
+    assert "Input files :\n  - loose.png\n" in log
+    assert "Input folders:\n  - first\n  - second\n" in log
+    assert "Input   :" not in log
+    assert "Recursive: False\nOutput  : processed\n" in log
+    assert "recursive=False" not in log
+    assert "[KEEP]    first/one.png" in log
+    assert str(tmp_path / "processed" / "first" / "one.png") not in log
+    assert "Output  : processed\n" in log
+    assert str(tmp_path) not in log
+
+    assert main(args) == 0
+    assert (tmp_path / "processed_1" / "first" / "one.png").is_file()
+
+
+def test_recursive_parent_input_covers_child_folders_and_files(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    parent = tmp_path / "testpicture"
+    child = parent / "testpic"
+    child.mkdir(parents=True)
+    parent_image = parent / "parent.jpg"
+    child_image = child / "child.jpg"
+    Image.new("RGB", (20, 20), (20, 30, 40)).save(parent_image)
+    Image.new("RGB", (20, 20), (20, 30, 40)).save(child_image)
+
+    args = [
+        "-i", str(parent), str(child), str(parent_image),
+        "-o", "processed", "--recursive", "--quiet",
+    ]
+    assert main(args) == 0
+
+    output = tmp_path / "processed"
+    assert (output / "testpicture" / "parent.jpg").is_file()
+    assert (output / "testpicture" / "testpic" / "child.jpg").is_file()
+    assert not (output / "testpic" / "child.jpg").exists()
+    assert not (output / "parent.jpg").exists()
+
+    log = (output / DEFAULT_LOG_NAME).read_text(encoding="utf-8")
+    assert (
+        "Input files :\n  - testpicture/parent.jpg\n"
+        "Input folders:\n  - testpicture\n  - testpicture/testpic\n"
+    ) in log
+    assert f"{child}: already covered by input folder {parent}" in log
+    assert f"{parent_image}: already covered by input folder {parent}" in log
+
+
+def test_convert_only_ignores_resize_options_for_single_file(tmp_path):
+    src = make_noise(tmp_path / "photo.png", (120, 80))
+    out = tmp_path / "converted"
+    assert main([str(src), "--output", str(out), "--convert-only",
+                 "--max-edge", "10", "--quiet"]) == 0
+    with Image.open(out / "photo.jpg") as converted:
+        assert converted.size == (120, 80)
+        assert converted.format == "JPEG"
+
+
+def test_all_inputs_honor_name_exclusions(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    album = tmp_path / "album"
+    (album / "skip").mkdir(parents=True)
+    Image.new("RGB", (20, 20), (20, 30, 40)).save(album / "keep.png")
+    Image.new("RGB", (20, 20), (20, 30, 40)).save(album / "skip" / "hidden.png")
+    Image.new("RGB", (20, 20), (20, 30, 40)).save(tmp_path / "skip.png")
+
+    assert main(["--all", "--recursive", "--exclude", "skip", "--exclude", "skip.png",
+                 "--output", "processed", "--quiet"]) == 0
+    assert (tmp_path / "processed" / "album" / "keep.png").is_file()
+    assert not (tmp_path / "processed" / "album" / "skip" / "hidden.png").exists()
+    assert not (tmp_path / "processed" / "skip.png").exists()
 
 
 def test_bad_arguments_return_1(folders, capsys):
