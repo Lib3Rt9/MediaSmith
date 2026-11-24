@@ -28,14 +28,19 @@ class Manifest:
             for line in fh:
                 try:
                     entry = json.loads(line)
-                    self.entries[entry["src"]] = entry  # last line wins
+                    key = entry.get("source_key")
+                    if not key:
+                        key = f"legacy:{entry['src']}"
+                    self.entries[key] = entry  # last line wins
                 except (ValueError, KeyError):
                     continue  # ignore a half-written last line
 
-    def lookup(self, rel: Path, size: int, mtime_ns: int, fingerprint: str,
+    def lookup(self, source_key: str, rel: Path, size: int, mtime_ns: int, fingerprint: str,
                dst_dir: Path) -> Optional[dict]:
         """The earlier entry if this exact file was already processed with the same options."""
-        entry = self.entries.get(rel.as_posix())
+        entry = self.entries.get(source_key)
+        if entry is None:
+            entry = self.entries.get(f"legacy:{rel.as_posix()}")
         if entry is None:
             return None
         if entry.get("size") != size or entry.get("mtime_ns") != mtime_ns:
@@ -53,6 +58,7 @@ class Manifest:
             return
         entry = {
             "src": res.rel.as_posix(),
+            "source_key": res.source_key,
             "size": size,
             "mtime_ns": mtime_ns,
             "opts": fingerprint,
