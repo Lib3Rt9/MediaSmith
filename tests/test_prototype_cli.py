@@ -164,6 +164,53 @@ def test_input_selector_auto_detects_files_and_folders(prototype, tmp_path, monk
     assert (tmp_path / "output" / "not_a_folder.jpg").is_file()
 
 
+def test_positional_paths_are_accepted_without_input_option(
+    prototype, tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    folder = tmp_path / "album"
+    folder.mkdir()
+    Image.new("RGB", (20, 20), (20, 30, 40)).save(folder / "folder.png")
+    image = tmp_path / "single.jpg"
+    Image.new("RGB", (30, 20), (20, 30, 40)).save(image)
+
+    monkeypatch.setattr(sys, "argv", [
+        "mediasmith.py", str(folder), str(image),
+        "--convert-only", "--output", "converted",
+    ])
+
+    assert prototype.main() == 0
+    assert (tmp_path / "converted" / "album" / "folder.jpg").is_file()
+    assert (tmp_path / "converted" / "single.jpg").is_file()
+
+
+def test_argument_forms_can_be_mixed_without_conflict(prototype, tmp_path):
+    positional = tmp_path / "positional.png"
+    selected = tmp_path / "selected.png"
+    repeated = tmp_path / "repeated.png"
+
+    parser = prototype.build_parser()
+
+    cases = (
+        ([str(positional)], [positional], None),
+        ([str(positional), "--convert-only"], [positional], None),
+        ([str(positional), "--recursive", "--exclude", "skip"],
+         [positional], None),
+        ([str(positional), "--output", "processed"],
+         [positional], None),
+        (["-i", str(selected)], [], [[selected]]),
+        (["-i", str(selected), "--recursive", "--quality", "80"],
+         [], [[selected]]),
+        ([str(positional), "-i", str(selected), "--all", "--convert-only"],
+         [positional], [[selected]]),
+        (["-i", str(selected), "-i", str(repeated), "--recursive", "--output", "done"],
+         [], [[selected], [repeated]]),
+    )
+
+    for argv, expected_positional, expected_input in cases:
+        args = parser.parse_args(argv)
+        assert args.positional_paths == expected_positional
+        assert args.input_paths == expected_input
 def test_all_folders_logs_empty_directories_and_skips_exclusions(
     prototype, tmp_path, monkeypatch
 ):
