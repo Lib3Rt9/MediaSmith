@@ -38,7 +38,7 @@ def test_project_identity_drives_cli_and_generated_names(capsys):
 def test_end_to_end_with_failure_log_and_reports(folders):
     src, dst = folders
     populate(src)
-    code = main([str(src), str(dst), "--recursive", "--no-progress",
+    code = main([str(src), str(dst), "--recursive",
                  "--report", str(dst / "r.json")])
     assert code == 2  # one file failed
     names = files_in(dst)
@@ -53,14 +53,44 @@ def test_end_to_end_with_failure_log_and_reports(folders):
     assert "cannot identify image file" in failure_details
     doc = json.loads((dst / "r.json").read_text())
     assert doc["summary"]["failed"] == 1 and doc["summary"]["converted"] == 2
+    assert doc["setup"]["min_quality"] == 30
+    assert doc["setup"]["workers"] == 1
+    assert doc["setup"]["input"] == [str(src.resolve())]
+    assert doc["setup"]["output"] == str(dst.resolve())
+    assert doc["setup"]["report"] == str((dst / "r.json").resolve())
+    assert doc["setup"]["copy_same"] is False
     statuses = {f["relative_path"]: f["status"] for f in doc["files"]}
     assert statuses["bad.png"] == "error" and "notes.txt" not in statuses
+
+
+def test_show_setup_prints_effective_values_without_inputs(capsys):
+    assert main(["--show-setup", "--workers", "2", "--quality", "88"]) == 0
+    output = capsys.readouterr().out
+    assert '"quality": 88' in output
+    assert '"workers": 2' in output
+    assert '"input": []' in output
+
+
+def test_quiet_keeps_progress_but_hides_per_file_details(folders, capsys):
+    src, dst = folders
+    Image.new("RGB", (20, 20), (20, 30, 40)).save(src / "small.png")
+
+    assert main([str(src / "small.png"), "--output", str(dst), "--quiet"]) == 0
+    output = capsys.readouterr().out
+    assert "[1/1]" in output
+    assert "[CONVERT]" not in output and "[KEEP]" not in output and "[COPY]" not in output
+
+
+@pytest.mark.parametrize("option", ["--no-progress", "--copy-jpg", "--jobs", "--rename"])
+def test_removed_options_are_rejected(option):
+    with pytest.raises(SystemExit):
+        build_parser().parse_args([option])
 
 
 def test_csv_report(folders):
     src, dst = folders
     populate(src)
-    main([str(src), str(dst), "--no-progress", "--report", str(dst / "r.csv")])
+    main([str(src), str(dst), "--report", str(dst / "r.csv")])
     rows = list(csv.DictReader((dst / "r.csv").open(encoding="utf-8")))
     assert {r["relative_path"] for r in rows} >= {"big.png", "small.jpg", "bad.png"}
     assert [r for r in rows if r["status"] == "error"][0]["error"]
@@ -69,14 +99,14 @@ def test_csv_report(folders):
 def test_custom_log_path(folders, tmp_path):
     src, dst = folders
     populate(src)
-    main([str(src), str(dst), "--no-progress", "--log", str(tmp_path / "my.log")])
+    main([str(src), str(dst), "--log", str(tmp_path / "my.log")])
     assert (tmp_path / "my.log").exists() and not (dst / DEFAULT_LOG_NAME).exists()
 
 
 def test_dry_run_creates_nothing(folders):
     src, dst = folders
     populate(src)
-    code = main([str(src), str(dst), "--recursive", "--dry-run", "--no-progress"])
+    code = main([str(src), str(dst), "--recursive", "--dry-run"])
     assert code == 2 and not dst.exists()
 
 
@@ -84,14 +114,14 @@ def test_originals_never_modified(folders):
     src, dst = folders
     populate(src)
     before = {p: p.read_bytes() for p in src.rglob("*") if p.is_file()}
-    main([str(src), str(dst), "--recursive", "--no-progress"])
+    main([str(src), str(dst), "--recursive"])
     assert before == {p: p.read_bytes() for p in src.rglob("*") if p.is_file()}
 
 
 def test_resume_skips_finished_files(folders):
     src, dst = folders
     populate(src)
-    args = [str(src), str(dst), "--recursive", "--no-progress", "--resume", "--quiet"]
+    args = [str(src), str(dst), "--recursive", "--resume", "--quiet"]
     main(args)
     first = files_in(dst)
     assert main(args) == 2                      # bad.png still fails, nothing else redone
@@ -134,11 +164,11 @@ def test_output_folder_cannot_contain_selected_file(tmp_path):
 def test_resume_after_interrupt_style_partial_manifest(folders):
     src, dst = folders
     make_noise(src / "a.png", (3000, 2000))
-    main([str(src), str(dst), "--no-progress", "--quiet"])
+    main([str(src), str(dst), "--quiet"])
     manifest = dst / MANIFEST_NAME
     with manifest.open("a") as fh:
         fh.write('{"half written')           # torn last line must not break loading
-    assert main([str(src), str(dst), "--no-progress", "--quiet", "--resume"]) == 0
+    assert main([str(src), str(dst), "--quiet", "--resume"]) == 0
     assert files_in(dst).count("a.jpg") == 1 and "a_1.jpg" not in files_in(dst)
 
 
@@ -146,9 +176,9 @@ def test_parallel_matches_sequential(folders, tmp_path):
     src, dst = folders
     for i in range(6):
         make_noise(src / f"p{i}.png", (2800, 1800))
-    main([str(src), str(dst), "--no-progress", "--quiet", "--jobs", "1"])
+    main([str(src), str(dst), "--quiet", "--workers", "1"])
     dst2 = tmp_path / "out2"
-    main([str(src), str(dst2), "--no-progress", "--quiet", "--jobs", "4"])
+    main([str(src), str(dst2), "--quiet", "--workers", "4"])
     assert files_in(dst) == files_in(dst2)
 
 
@@ -156,24 +186,15 @@ def test_parallel_name_clash_is_safe(folders):
     src, dst = folders
     for ext in ("png", "bmp", "tiff"):
         make_noise(src / f"same.{ext}", (2800, 1800))
-    main([str(src), str(dst), "--no-progress", "--quiet", "--jobs", "3"])
+    main([str(src), str(dst), "--quiet", "--workers", "3"])
     assert sorted(n for n in files_in(dst) if n.endswith(".jpg")) == \
         ["same.jpg", "same_1.jpg", "same_2.jpg"]
-
-
-def test_rename_and_format(folders):
-    src, dst = folders
-    make_noise(src / "a.png", (3000, 2000))
-    make_noise(src / "b.png", (3000, 2000))
-    main([str(src), str(dst), "--no-progress", "--quiet", "--format", "webp",
-          "--rename", "wall_{n:03d}"])
-    assert [n for n in files_in(dst) if n.endswith(".webp")] == ["wall_001.webp", "wall_002.webp"]
 
 
 def test_width_option_and_conflict(folders, capsys):
     src, dst = folders
     make_noise(src / "a.png", (3000, 2000))
-    main([str(src), str(dst), "--no-progress", "--quiet", "--width", "1000"])
+    main([str(src), str(dst), "--quiet", "--width", "1000"])
     with Image.open(dst / "a.jpg") as im:
         assert im.size == (1000, 667)
     with pytest.raises(SystemExit):   # argparse rejects two resize options
@@ -267,12 +288,30 @@ def test_all_inputs_honor_name_exclusions(tmp_path, monkeypatch):
     assert not (tmp_path / "processed" / "skip.png").exists()
 
 
+def test_exclude_extension_is_case_insensitive_and_reported_in_setup(tmp_path):
+    source = tmp_path / "photos"
+    source.mkdir()
+    Image.new("RGB", (20, 20), (20, 30, 40)).save(source / "skip.PNG", format="PNG")
+    Image.new("RGB", (20, 20), (20, 30, 40)).save(source / "keep.jpg", format="JPEG")
+
+    output = tmp_path / "processed"
+    report = output / "report.json"
+    assert main([
+        str(source), "--output", str(output), "--quiet",
+        "--exclude-extension", "PNG", "--report", str(report),
+    ]) == 0
+
+    assert (output / "photos" / "keep.jpg").is_file()
+    assert not (output / "photos" / "skip.jpg").exists()
+    setup = json.loads(report.read_text(encoding="utf-8"))["setup"]
+    assert setup["exclude_extensions"] == [".png"]
+
+
 def test_bad_arguments_return_1(folders, capsys):
     src, dst = folders
     assert main([str(src / "missing"), str(dst)]) == 1
     assert main([str(src), str(dst), "--quality", "500"]) == 1
     assert main([str(src), str(dst), "--scale", "200"]) == 1
-    assert main([str(src), str(dst), "--rename", "{bogus}"]) == 1
     assert main([str(src), str(dst), "--report", "x.txt"]) == 1
     assert main([str(src), str(src)]) == 1
     assert "error:" in capsys.readouterr().err
@@ -284,11 +323,11 @@ def test_config_file_and_cli_override(folders, tmp_path):
     make_noise(src / "a.png", (3000, 2000))
     cfg = tmp_path / "ms.toml"
     cfg.write_text('max-edge = 1000\nquality = 80\nformat = "webp"\n')
-    main([str(src), str(dst), "--no-progress", "--quiet", "--config", str(cfg)])
+    main([str(src), str(dst), "--quiet", "--config", str(cfg)])
     with Image.open(dst / "a.webp") as im:
         assert im.size == (1000, 667)
     dst2 = tmp_path / "out2"
-    main([str(src), str(dst2), "--no-progress", "--quiet", "--config", str(cfg), "--width", "600"])
+    main([str(src), str(dst2), "--quiet", "--config", str(cfg), "--width", "600"])
     with Image.open(dst2 / "a.webp") as im:
         assert im.size == (600, 400)   # CLI size option beats the config's max-edge
 
@@ -298,7 +337,7 @@ def test_json_config_and_unknown_key(folders, tmp_path):
     make_noise(src / "a.png", (3000, 2000))
     cfg = tmp_path / "ms.json"
     cfg.write_text('{"max_edge": 800}')
-    main([str(src), str(dst), "--no-progress", "--quiet", "--config", str(cfg)])
+    main([str(src), str(dst), "--quiet", "--config", str(cfg)])
     with Image.open(dst / "a.jpg") as im:
         assert max(im.size) == 800
     cfg.write_text('{"nonsense": 1}')
@@ -308,6 +347,6 @@ def test_json_config_and_unknown_key(folders, tmp_path):
 def test_target_size_via_cli(folders):
     src, dst = folders
     make_noise(src / "a.png", (1200, 800))
-    main([str(src), str(dst), "--no-progress", "--quiet", "--target-size", "300KB",
+    main([str(src), str(dst), "--quiet", "--target-size", "300KB",
           "--min-quality", "5"])
     assert (dst / "a.jpg").stat().st_size <= 300 * 1024
