@@ -46,7 +46,7 @@ LANCZOS = getattr(Image, "Resampling", Image).LANCZOS
 JPEG_EXTS = {".jpg", ".jpeg", ".jfif", ".jpe"}
 OTHER_EXTS = {".png", ".bmp", ".tif", ".tiff", ".webp", ".gif", ".heic", ".heif", ".avif"}
 INPUT_EXTS = JPEG_EXTS | OTHER_EXTS
-RENAME_EXTS = {".jfif", ".jpe"}  # plain JPEG data with an unusual extension -> saved as .jpg
+RENAME_EXTS = {".jfif", ".jpe"}  # Plain JPEG data with unusual extensions -> saved as .jpg.
 
 # Result statuses
 COPIED = "copied"                # same-format file copied untouched
@@ -59,7 +59,7 @@ ERROR = "error"                  # something went wrong, see .error
 SIZE_STATUSES = (COPIED, CONVERTED, KEPT_ORIGINAL, ALREADY_DONE)
 
 RESIZE_MODES = ("max_edge", "width", "height", "scale")
-TEMPLATE_FIELDS = ("name", "n", "date", "parent", "width", "height", "orig_ext", "format")
+# TEMPLATE_FIELDS = ("name", "n", "date", "parent", "width", "height", "orig_ext", "format")
 
 
 @dataclass(frozen=True)
@@ -101,17 +101,17 @@ def parse_size(text) -> int:
     return int(float(m.group(1)) * mult)
 
 
-def _sample_fields() -> dict:
-    return dict(name="photo", n=1, date="20260101", parent="folder",
-                width=100, height=100, orig_ext="png", format="jpg")
-
-
-def check_template(template: str) -> None:
-    try:
-        template.format(**_sample_fields())
-    except (KeyError, IndexError, ValueError, AttributeError, TypeError) as e:
-        raise ValueError(f"Bad --rename template {template!r}: {e!r}. "
-                         f"Available fields: {', '.join('{' + f + '}' for f in TEMPLATE_FIELDS)}")
+# def _sample_fields() -> dict:
+#     return dict(name="photo", n=1, date="20260101", parent="folder",
+#                 width=100, height=100, orig_ext="png", format="jpg")
+#
+#
+# def check_template(template: str) -> None:
+#     try:
+#         template.format(**_sample_fields())
+#     except (KeyError, IndexError, ValueError, AttributeError, TypeError) as e:
+#         raise ValueError(f"Bad --rename template {template!r}: {e!r}. "
+#                          f"Available fields: {', '.join('{' + f + '}' for f in TEMPLATE_FIELDS)}")
 
 
 @dataclass
@@ -127,7 +127,7 @@ class Options:
     strip_metadata: bool = False       # drops EXIF (orientation is applied first)
     strip_icc: bool = False
     copy_same: bool = False
-    rename: Optional[str] = None
+    # rename: Optional[str] = None  # Temporarily disabled: custom output-name templates.
     dry_run: bool = False
     convert_only: bool = False
 
@@ -153,8 +153,8 @@ class Options:
             if not FORMATS[self.fmt].lossy or self.lossless:
                 raise ValueError("--target-size needs a lossy format "
                                  "(jpg, webp without --lossless, or avif).")
-        if self.rename:
-            check_template(self.rename)
+        # if self.rename:
+        #     check_template(self.rename)
         if self.fmt == "avif" and not avif_supported():
             raise ValueError("AVIF output is not available: use a recent Pillow "
                              "or run `pip install pillow-avif-plugin`.")
@@ -277,9 +277,9 @@ def compute_size(width: int, height: int, mode: str, value: float,
     return max(1, round(width * factor)), max(1, round(height * factor))
 
 
-def safe_filename(text: str, fallback: str) -> str:
-    cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", text).strip().strip(".")
-    return cleaned or fallback
+# def safe_filename(text: str, fallback: str) -> str:
+#     cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", text).strip().strip(".")
+#     return cleaned or fallback
 
 
 # --------------------------------------------------------------------------- #
@@ -393,14 +393,16 @@ def render(src: Path, opts: Options, info: FormatInfo):
 # --------------------------------------------------------------------------- #
 
 def make_stem(job: Job, ctx: Context, size: Optional[Tuple[int, int]]) -> str:
-    opts = ctx.opts
-    if not opts.rename:
-        return job.src.stem
-    w, h = size if size else (0, 0)
-    fields = dict(name=job.src.stem, n=job.number, date=ctx.today,
-                  parent=job.rel.parent.name, width=w, height=h,
-                  orig_ext=job.src.suffix.lower().lstrip("."), format=opts.fmt)
-    return safe_filename(opts.rename.format(**fields), job.src.stem)
+    # Temporarily disabled: custom output-name templates.
+    # opts = ctx.opts
+    # if not opts.rename:
+    #     return job.src.stem
+    # w, h = size if size else (0, 0)
+    # fields = dict(name=job.src.stem, n=job.number, date=ctx.today,
+    #               parent=job.rel.parent.name, width=w, height=h,
+    #               orig_ext=job.src.suffix.lower().lstrip("."), format=opts.fmt)
+    # return safe_filename(opts.rename.format(**fields), job.src.stem)
+    return job.src.stem
 
 
 def _copy_original(job: Job, ctx: Context, res: FileResult, out_dir: Path,
