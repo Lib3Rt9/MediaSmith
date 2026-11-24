@@ -101,6 +101,36 @@ def test_resume_skips_finished_files(folders):
     assert "new.jpg" in files_in(dst)
 
 
+def test_resume_distinguishes_selected_files_with_same_name(tmp_path):
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    Image.new("RGB", (20, 20), "red").save(first / "same.png")
+    Image.new("RGB", (20, 20), "blue").save(second / "same.png")
+    output = tmp_path / "out"
+    args = [
+        "-i", str(first / "same.png"), str(second / "same.png"),
+        "-o", str(output), "--resume", "--quiet",
+    ]
+
+    assert main(args) == 0
+    first_run = files_in(output)
+    assert main(args) == 0
+    assert files_in(output) == first_run
+    assert len([name for name in first_run if name.startswith("same")]) == 2
+
+    manifest = (output / MANIFEST_NAME).read_text()
+    assert '"source":' not in manifest
+    assert "source_key" in manifest
+
+
+def test_output_folder_cannot_contain_selected_file(tmp_path):
+    src = tmp_path / "photo.jpg"
+    Image.new("RGB", (20, 20), "red").save(src)
+    assert main([str(src), str(tmp_path), "--quiet"]) == 1
+
+
 def test_resume_after_interrupt_style_partial_manifest(folders):
     src, dst = folders
     make_noise(src / "a.png", (3000, 2000))
