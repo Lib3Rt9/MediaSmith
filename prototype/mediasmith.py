@@ -12,8 +12,7 @@ What it does
 - Existing JPGs:
     * already within the size limit -> copied byte-for-byte (zero loss);
                                        .jfif/.jpe files are renamed to .jpg
-    * larger than the limit         -> resized and re-saved (use --copy-jpg to copy
-                                       ALL existing JPGs untouched instead)
+    * larger than the limit         -> resized and re-saved
 - If the converted file would NOT be smaller than the original, the original is
   copied unchanged instead (no bigger files, no needless quality loss).
 - Output goes to an automatically indexed ``output`` folder in the current
@@ -55,7 +54,7 @@ except ImportError:
 
 JPEG_EXTS = {".jpg", ".jpeg", ".jfif", ".jpe"}
 OTHER_EXTS = {".png", ".bmp", ".tif", ".tiff", ".webp", ".gif", ".heic", ".heif"}
-RENAME_TO_JPG = {".jfif", ".jpe"}  # plain JPEG data with an unusual extension
+RENAME_TO_JPG = {".jfif", ".jpe"}  # Plain JPEG data with unusual extensions -> saved as .jpg.
 
 DEFAULT_LOG_NAME = "mediasmith.log"
 
@@ -204,7 +203,7 @@ def copy_original(src: Path, out_dir: Path, res: FileResult, status: str) -> Fil
 
 
 def process_file(src: Path, rel: Path, dst_dir: Path, max_edge: int,
-                 quality: int, copy_jpg: bool, convert_only: bool = False) -> FileResult:
+                 quality: int, convert_only: bool = False) -> FileResult:
     """Handle one file and ALWAYS return a FileResult (never raises)."""
     res = FileResult(status=SKIPPED, src=src, rel=rel)
     ext = src.suffix.lower()
@@ -219,7 +218,7 @@ def process_file(src: Path, rel: Path, dst_dir: Path, max_edge: int,
         if ext in JPEG_EXTS:
             # Decide: copy untouched, or resize because it's too large
             needs_resize = False
-            if not copy_jpg and not convert_only:
+            if not convert_only:
                 with Image.open(src) as im:
                     res.old_size = im.size
                     needs_resize = max(im.size) > max_edge
@@ -344,6 +343,13 @@ def display_path(path: Path) -> str:
     return relative.as_posix() or "."
 
 
+def normalize_extension(value: str) -> str:
+    extension = value.strip().casefold()
+    if not extension or extension == "." or "/" in extension or "\\" in extension or "*" in extension:
+        raise argparse.ArgumentTypeError("Use an extension such as .tmp or .tar.gz")
+    return extension if extension.startswith(".") else f".{extension}"
+
+
 def write_log(log_path: Path, args: argparse.Namespace, input_paths: List[Path],
               skipped_inputs: List[str], empty_directories: List[Path],
               skipped_directories: List[Path], dst_dir: Path, output_created: bool,
@@ -364,8 +370,9 @@ def write_log(log_path: Path, args: argparse.Namespace, input_paths: List[Path],
         f"Output  : {display_path(dst_dir)}" + ("" if output_created else " (not created)"),
         f"Setup   : format=jpg max-edge={args.max_edge} quality={args.quality} "
         f"convert-only={args.convert_only} "
-        f"copy-jpg={args.copy_jpg} exclude="
-        f"{', '.join(describe_exclusion(path, script_dir) for path in args.exclude) or 'None'}",
+        f"exclude="
+        f"{', '.join(describe_exclusion(path, script_dir) for path in args.exclude) or 'None'} "
+        f"exclude-extension={', '.join(args.exclude_extension) or 'None'}",
     ]
     if skipped_inputs:
         lines += ["", f"--- Skipped input paths ({len(skipped_inputs)}) ---"]
@@ -404,6 +411,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--exclude", action="append", type=Path, default=[], metavar="PATH_OR_NAME",
                    help="Exclude exact paths (including folder contents) or every file/folder "
                    "with a matching bare name; repeat as needed")
+    p.add_argument("--exclude-extension", action="append", default=[], metavar="EXT",
+                   type=normalize_extension,
+                   help="Exclude files ending in EXT (e.g. .tmp or .tar.gz); repeat as needed")
     p.add_argument("-o", "--output", dest="output_folder",
                    type=Path, default=Path("output"),
                    help="Output directory (default: output)")
@@ -413,8 +423,6 @@ def build_parser() -> argparse.ArgumentParser:
                    help="JPEG quality 1-100 (default 95)")
     p.add_argument("--recursive", action="store_true",
                    help="Also process sub-folders (structure is kept)")
-    p.add_argument("--copy-jpg", action="store_true",
-                   help="Copy ALL existing JPGs untouched, even if larger than --max-edge")
     p.add_argument("--convert-only", action="store_true",
                    help="Convert to JPG without resizing; --quality still controls JPEG encoding")
     return p
@@ -475,6 +483,11 @@ def main() -> int:
 
     def is_excluded(path: Path) -> bool:
         resolved = path.resolve()
+        if path.is_file() and any(
+            path.name.casefold().endswith(extension)
+            for extension in args.exclude_extension
+        ):
+            return True
         for exclusion, raw in zip(exclusion_paths, args.exclude):
             if resolved == exclusion or exclusion in resolved.parents:
                 return True
@@ -489,7 +502,7 @@ def main() -> int:
 
     for resolved_path in input_paths:
         if is_excluded(resolved_path):
-            skipped_inputs.append(f"{resolved_path}: excluded by --exclude")
+            skipped_inputs.append(f"{resolved_path}: excluded by configured filters")
             continue
         if resolved_path.is_dir():
             valid_inputs.append((resolved_path, True))
@@ -579,8 +592,7 @@ def main() -> int:
             for f in files:
                 rel = f.relative_to(input_path) if is_dir else Path(f.name)
                 res = process_file(f, rel, input_output,
-                                   args.max_edge, args.quality, args.copy_jpg,
-                                   args.convert_only)
+                                   args.max_edge, args.quality, args.convert_only)
                 if len(valid_inputs) > 1:
                     res.input_label = input_output.name if is_dir else input_path.name
                 results.append(res)
