@@ -67,6 +67,20 @@ def test_custom_log_option_is_removed(prototype, tmp_path):
         )
 
 
+def test_copy_jpg_flag_is_removed_and_jfif_is_normalized_to_jpg(
+    prototype, tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    source = tmp_path / "images"
+    source.mkdir()
+    Image.new("RGB", (20, 20), (20, 30, 40)).save(source / "photo.jfif", format="JPEG")
+
+    assert run_cli(prototype, [source], monkeypatch) == 0
+    assert (tmp_path / "output" / "images" / "photo.jpg").is_file()
+    with pytest.raises(SystemExit):
+        prototype.build_parser().parse_args(["--copy-jpg"])
+
+
 def test_inputs_with_same_name_get_distinct_output_subfolders(
     prototype, tmp_path, monkeypatch
 ):
@@ -258,6 +272,27 @@ def test_all_images_excludes_named_files(prototype, tmp_path, monkeypatch):
     assert prototype.main() == 0
     assert (tmp_path / "processed" / "keep.jpg").is_file()
     assert not (tmp_path / "processed" / "skip.jpg").exists()
+
+
+def test_exclude_extension_filters_files_case_insensitively(
+    prototype, tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    source = tmp_path / "photos"
+    source.mkdir()
+    Image.new("RGB", (20, 20), (30, 40, 50)).save(source / "skip.PNG", format="PNG")
+    Image.new("RGB", (20, 20), (30, 40, 50)).save(source / "keep.jpg", format="JPEG")
+
+    assert run_cli(
+        prototype, [source], monkeypatch,
+        ["--output", "processed", "--exclude-extension", "png", "--convert-only"],
+    ) == 0
+
+    output = tmp_path / "processed" / "photos"
+    assert (output / "keep.jpg").is_file()
+    assert not (output / "skip.jpg").exists()
+    log = (tmp_path / "processed" / prototype.DEFAULT_LOG_NAME).read_text(encoding="utf-8")
+    assert "exclude-extension=.png" in log
 
 
 def test_input_and_all_can_be_combined(prototype, tmp_path, monkeypatch):
