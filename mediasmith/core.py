@@ -177,6 +177,7 @@ class FileResult:
     src: Path
     rel: Path                                   # path relative to the input folder
     order: int = 0                              # position in the sorted input list
+    source_key: str = ""
     dst: Optional[Path] = None
     bytes_in: int = 0                           # filled for successful files only
     bytes_out: int = 0
@@ -194,6 +195,7 @@ class Job:
     src: Path
     rel: Path
     number: int  # 1-based counter over image files (used by {n} in --rename)
+    source_key: str = ""
 
 
 class PathReserver:
@@ -420,7 +422,8 @@ def process_file(job: Job, ctx: Context) -> FileResult:
     """Handle one file and ALWAYS return a FileResult (never raises on bad files)."""
     opts = ctx.opts
     src = job.src
-    res = FileResult(status=SKIPPED, src=src, rel=job.rel, order=job.order)
+    res = FileResult(status=SKIPPED, src=src, rel=job.rel, order=job.order,
+                     source_key=job.source_key)
     ext = src.suffix.lower()
     if ext not in INPUT_EXTS:
         return res
