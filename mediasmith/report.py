@@ -7,7 +7,7 @@ import json
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from . import __version__
 from .core import (ALREADY_DONE, CONVERTED, COPIED, ERROR, KEPT_ORIGINAL, SIZE_STATUSES,
@@ -19,27 +19,38 @@ CSV_COLUMNS = ["status", "source", "relative_path", "destination", "bytes_in", "
                "target_met", "error"]
 
 
+def _display_path(path: Path) -> str:
+    """Prefer a cwd-relative path in human-readable logs."""
+    resolved = path.resolve()
+    try:
+        relative = resolved.relative_to(Path.cwd().resolve())
+    except ValueError:
+        return str(path)
+    return relative.as_posix() or "."
+
+
 def describe(r: FileResult) -> str:
     """One console line per file."""
+    rel = r.rel.as_posix()
     if r.status == COPIED:
         renamed = f" -> {r.dst.name}" if r.dst and r.dst.name != r.src.name else ""
-        return f"[COPY]    {r.rel}{renamed}"
+        return f"[COPY]    {rel}{renamed}"
     if r.status == KEPT_ORIGINAL:
         renamed = f" -> {r.dst.name}" if r.dst and r.dst.name != r.src.name else ""
-        return (f"[KEEP]    {r.rel}{renamed}  new version would be bigger "
+        return (f"[KEEP]    {rel}{renamed}  new version would be bigger "
                 f"({r.bytes_in / 1024:.0f} KB -> {r.candidate_bytes / 1024:.0f} KB), original copied")
     if r.status == CONVERTED:
         o, n = r.old_size, r.new_size
         extra = ""
         if r.target_met is not None:
             extra = f"  q={r.quality}" + ("" if r.target_met else " (target size not reached)")
-        return (f"[CONVERT] {r.rel} -> {r.dst.name}  {o[0]}x{o[1]} -> {n[0]}x{n[1]}  "
+        return (f"[CONVERT] {rel} -> {r.dst.name}  {o[0]}x{o[1]} -> {n[0]}x{n[1]}  "
                 f"({r.bytes_in / 1024:.0f} KB -> {r.bytes_out / 1024:.0f} KB){extra}")
     if r.status == ALREADY_DONE:
-        return f"[DONE]    {r.rel}  already processed"
+        return f"[DONE]    {rel}  already processed"
     if r.status == ERROR:
-        return f"[ERROR]   {r.rel}: {r.error}"
-    return f"[SKIP]    {r.rel}"
+        return f"[ERROR]   {rel}: {r.error}"
+    return f"[SKIP]    {rel}"
 
 
 def _count(results: List[FileResult], status: str) -> int:
@@ -103,30 +114,50 @@ def record_dict(r: FileResult) -> dict:
     }
 
 
-def describe_options(opts: Options, recursive: bool, jobs: int) -> str:
+def describe_options(opts: Options, jobs: int) -> str:
     d = asdict(opts)
-    d["recursive"] = recursive
     d["jobs"] = jobs
-    return " ".join(f"{k}={v}" for k, v in d.items() if v not in (None, False))
+    return " ".join(
+        f"{k}={v}" for k, v in d.items()
+        if v not in (None, False)
+    )
 
 
-def write_log(log_path: Path, src_dir: Path, dst_dir: Path, opts: Options, recursive: bool,
+def write_log(log_path: Path, src_dirs: List[Path], dst_dir: Path, opts: Options, recursive: bool,
               jobs: int, results: List[FileResult], started: datetime,
-              interrupted: bool) -> None:
+              interrupted: bool, skipped_inputs: Optional[List[str]] = None,
+              empty_directories: Optional[List[Path]] = None,
+              skipped_directories: Optional[List[Path]] = None) -> None:
     """Summary plus every failure with its reason."""
     log_path.parent.mkdir(parents=True, exist_ok=True)
     failures = failure_lines(results)
+    input_files = [f"  - {_display_path(path)}" for path in src_dirs if not path.is_dir()]
+    input_folders = [f"  - {_display_path(path)}" for path in src_dirs if path.is_dir()]
     lines = [
         f"{PROJECT_NAME} {__version__} log",
         f"Started : {started:%Y-%m-%d %H:%M:%S}",
         f"Finished: {datetime.now():%Y-%m-%d %H:%M:%S}",
-        f"Input   : {src_dir}",
-        f"Output  : {dst_dir}",
-        f"Options : {describe_options(opts, recursive, jobs)}",
+        "Input files :",
+        *(input_files or ["  None"]),
+        "Input folders:",
+        *(input_folders or ["  None"]),
+        f"Recursive: {recursive}",
+        f"Output  : {_display_path(dst_dir)}",
+        f"Options : {describe_options(opts, jobs)}",
     ]
+    if skipped_inputs:
+        lines += ["", f"--- Skipped input paths ({len(skipped_inputs)}) ---"]
+        lines.extend(f"  {message}" for message in skipped_inputs)
+    if empty_directories:
+        lines += ["", f"--- Empty directories ({len(empty_directories)}) ---"]
+        lines.extend(f"  [EMPTY] {_display_path(path)}" for path in empty_directories)
+    if skipped_directories:
+        lines += ["", f"--- Directories with no output files ({len(skipped_directories)}) ---"]
+        lines.extend(f"  [SKIP DIR] {_display_path(path)}" for path in skipped_directories)
     if interrupted:
         lines.append("NOTE: run was interrupted (Ctrl-C); the list below is incomplete.")
-    lines += ["", "--- Summary ---", *summarize(results), ""]
+    lines += ["", "--- Files ---", *(describe(r) for r in results),
+              "", "--- Summary ---", *summarize(results), ""]
     if failures:
         lines.append(f"--- Failed files ({len(failures)}) ---")
         lines += failures
@@ -135,7 +166,7 @@ def write_log(log_path: Path, src_dir: Path, dst_dir: Path, opts: Options, recur
     log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def write_report(path: Path, src_dir: Path, dst_dir: Path, opts: Options, recursive: bool,
+def write_report(path: Path, src_dirs: List[Path], dst_dir: Path, opts: Options, recursive: bool,
                  jobs: int, results: List[FileResult], started: datetime,
                  interrupted: bool) -> None:
     """JSON (summary + options + every file) or CSV (every file), chosen by extension."""
@@ -153,7 +184,7 @@ def write_report(path: Path, src_dir: Path, dst_dir: Path, opts: Options, recurs
         "started": started.isoformat(timespec="seconds"),
         "finished": datetime.now().isoformat(timespec="seconds"),
         "interrupted": interrupted,
-        "input": str(src_dir),
+        "input": str(src_dirs[0]) if len(src_dirs) == 1 else [str(p) for p in src_dirs],
         "output": str(dst_dir),
         "options": {**asdict(opts), "recursive": recursive, "jobs": jobs},
         "summary": summary_dict(results),

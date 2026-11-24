@@ -19,7 +19,7 @@ What it does
 - Output goes to an automatically indexed ``output`` folder in the current
   working directory, with one sub-folder per input folder; originals are never modified.
 - Every file produces one result record. Failures are listed at the end of the run
-  and every per-file result is written to mediasmith.log beside this script.
+  and every per-file result is written to mediasmith.log in the output folder.
 
 Requirements:  pip install pillow
 Optional (HEIC/HEIF input):  pip install pillow-heif
@@ -334,6 +334,16 @@ def describe_exclusion(path: Path, script_dir: Path) -> str:
     return f"[path] {path.name or path}"
 
 
+def display_path(path: Path) -> str:
+    """Prefer a current-directory-relative path in human-readable output."""
+    resolved = path.resolve()
+    try:
+        relative = resolved.relative_to(Path.cwd().resolve())
+    except ValueError:
+        return str(path)
+    return relative.as_posix() or "."
+
+
 def write_log(log_path: Path, args: argparse.Namespace, input_paths: List[Path],
               skipped_inputs: List[str], empty_directories: List[Path],
               skipped_directories: List[Path], dst_dir: Path, output_created: bool,
@@ -350,9 +360,10 @@ def write_log(log_path: Path, args: argparse.Namespace, input_paths: List[Path],
         f"Finished: {finished:%Y-%m-%d %H:%M:%S}",
         f"Input files : {', '.join(path.name for path in input_paths if not path.is_dir()) or 'None'}",
         f"Input folders: {', '.join(path.name for path in input_paths if path.is_dir()) or 'None'}",
-        f"Output  : {dst_dir}" + ("" if output_created else " (not created)"),
+        f"Recursive: {args.recursive}",
+        f"Output  : {display_path(dst_dir)}" + ("" if output_created else " (not created)"),
         f"Setup   : format=jpg max-edge={args.max_edge} quality={args.quality} "
-        f"convert-only={args.convert_only} recursive={args.recursive} "
+        f"convert-only={args.convert_only} "
         f"copy-jpg={args.copy_jpg} exclude="
         f"{', '.join(describe_exclusion(path, script_dir) for path in args.exclude) or 'None'}",
     ]
@@ -361,10 +372,10 @@ def write_log(log_path: Path, args: argparse.Namespace, input_paths: List[Path],
         lines.extend(f"  {message}" for message in skipped_inputs)
     if empty_directories:
         lines += ["", f"--- Empty directories ({len(empty_directories)}) ---"]
-        lines.extend(f"  [EMPTY] {path}" for path in empty_directories)
+        lines.extend(f"  [EMPTY] {display_path(path)}" for path in empty_directories)
     if skipped_directories:
         lines += ["", f"--- Directories with no output files ({len(skipped_directories)}) ---"]
-        lines.extend(f"  [SKIP DIR] {path}" for path in skipped_directories)
+        lines.extend(f"  [SKIP DIR] {display_path(path)}" for path in skipped_directories)
     if interrupted:
         lines.append("NOTE: run was interrupted (Ctrl-C); the list below is incomplete.")
     lines += ["", "--- Files ---", *(describe(r) for r in results),
@@ -495,6 +506,22 @@ def main() -> int:
                 print(f"Skipping invalid input: {message}")
             skipped_inputs.append(message)
 
+    if args.recursive:
+        input_directories = [path for path, is_dir in valid_inputs if is_dir]
+        uncovered_inputs: List[Tuple[Path, bool]] = []
+        for path, is_dir in valid_inputs:
+            covering_directory = next(
+                (directory for directory in input_directories if directory in path.parents),
+                None,
+            )
+            if covering_directory is None:
+                uncovered_inputs.append((path, is_dir))
+            else:
+                skipped_inputs.append(
+                    f"{path}: already covered by input folder {covering_directory}"
+                )
+        valid_inputs = uncovered_inputs
+
     log_path = (script_dir / DEFAULT_LOG_NAME).resolve()
     started = datetime.now()
     for input_path, is_dir in valid_inputs:
@@ -507,12 +534,13 @@ def main() -> int:
         try:
             write_log(log_path, args, input_paths, skipped_inputs, [], [],
                       requested_dst, False, [], started, False, script_dir)
-            print(f"Log written to: {log_path}")
+            print(f"Log written to: {display_path(log_path)}")
         except OSError as e:
-            print(f"Could not write log file {log_path}: {e}")
+            print(f"Could not write log file {display_path(log_path)}: {e}")
         return 1
 
     dst_dir = unique_directory(requested_dst)
+    log_path = (dst_dir / DEFAULT_LOG_NAME).resolve()
     input_outputs: List[Tuple[Path, bool, Path]] = []
     reserved_output_dirs: Set[Path] = set()
     for input_path, is_dir in valid_inputs:
@@ -579,8 +607,10 @@ def main() -> int:
 
     remove_empty_output_directories(dst_dir)
     output_created = dst_dir.is_dir()
+    if not output_created:
+        log_path = (script_dir / DEFAULT_LOG_NAME).resolve()
     if output_created:
-        print(f"\nOutput folder: {dst_dir}")
+        print(f"\nOutput folder: {display_path(dst_dir)}")
     else:
         print(f"\nOutput folder not created: {dst_dir}")
     print("\n--- Done ---")
@@ -602,9 +632,9 @@ def main() -> int:
                   sorted(empty_directories), sorted(skipped_directories),
                   dst_dir, output_created, results, started, interrupted,
                   script_dir)
-        print(f"\nLog written to: {log_path}")
+        print(f"\nLog written to: {display_path(log_path)}")
     except OSError as e:
-        print(f"\nCould not write log file {log_path}: {e}")
+        print(f"\nCould not write log file {display_path(log_path)}: {e}")
 
     if interrupted:
         return 130

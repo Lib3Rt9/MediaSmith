@@ -129,6 +129,7 @@ class Options:
     copy_same: bool = False
     rename: Optional[str] = None
     dry_run: bool = False
+    convert_only: bool = False
 
     def validate(self) -> None:
         if self.fmt not in FORMATS:
@@ -364,8 +365,9 @@ def render(src: Path, opts: Options, info: FormatInfo):
         old_size = work.size
 
         work = prepare(work, info)
-        new_size = compute_size(work.width, work.height, opts.resize_mode,
-                                opts.resize_value, opts.upscale)
+        new_size = (work.size if opts.convert_only else
+                    compute_size(work.width, work.height, opts.resize_mode,
+                                 opts.resize_value, opts.upscale))
         if new_size != work.size:
             work = work.resize(new_size, LANCZOS)
         if opts.strip_icc:
@@ -431,15 +433,16 @@ def process_file(job: Job, ctx: Context) -> FileResult:
 
         with Image.open(src) as im:
             res.old_size = im.size
-        planned = compute_size(res.old_size[0], res.old_size[1], opts.resize_mode,
-                               opts.resize_value, opts.upscale)
+        planned = (res.old_size if opts.convert_only else
+                   compute_size(res.old_size[0], res.old_size[1], opts.resize_mode,
+                                opts.resize_value, opts.upscale))
 
         # Same format, nothing to change -> byte-for-byte copy (zero loss)
         strips = opts.strip_metadata or opts.strip_icc
         passthrough = (
             ext in info.same_exts and not strips
             and (opts.copy_same
-                 or (planned == res.old_size
+                 or (not opts.convert_only and planned == res.old_size
                      and (opts.target_bytes is None or src_bytes <= opts.target_bytes)))
         )
         if passthrough:
@@ -472,7 +475,8 @@ def process_file(job: Job, ctx: Context) -> FileResult:
         res.status = ERROR
         res.dst = None
         res.bytes_in = res.bytes_out = 0
-        res.error = f"{type(e).__name__}: {e}"
+        error_message = str(e).replace(repr(str(src)), "").rstrip()
+        res.error = f"{type(e).__name__}: {error_message}"
         return res
     finally:
         if tmp is not None:
