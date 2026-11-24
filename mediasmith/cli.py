@@ -275,8 +275,8 @@ def _main(argv: Optional[List[str]]) -> int:
     for input_path, is_dir in valid_inputs:
         if is_dir and (input_path == dst_dir or input_path in dst_dir.parents):
             raise UsageError("Output folder must not be inside an input folder.")
-        if not is_dir and input_path == dst_dir:
-            raise UsageError("Output folder must be different from the input file.")
+        if not is_dir and dst_dir in input_path.parents:
+            raise UsageError("Output folder must not contain or be the parent of an input file.")
 
     log_path = (args.log or (dst_dir / DEFAULT_LOG_NAME)).resolve()
     report_path = args.report.resolve() if args.report else None
@@ -307,6 +307,15 @@ def _main(argv: Optional[List[str]]) -> int:
     if args.resume:
         manifest.load()
 
+    direct_files = [path for path, is_dir in valid_inputs if not is_dir]
+    try:
+        direct_common_parent = (
+            Path(os.path.commonpath([str(path.parent.resolve()) for path in direct_files]))
+            if direct_files else None
+        )
+    except ValueError:
+        direct_common_parent = None
+
     started = datetime.now()
     results: List[FileResult] = []
     todo: List[Job] = []
@@ -334,8 +343,16 @@ def _main(argv: Optional[List[str]]) -> int:
         for f in files:
             if is_dir:
                 rel = input_root / f.relative_to(input_path)
+                source_key = f"folder:{rel.as_posix()}"
             else:
                 rel = Path(f.name)
+                if direct_common_parent is not None:
+                    try:
+                        source_key = f"file:{f.resolve().relative_to(direct_common_parent).as_posix()}"
+                    except ValueError:
+                        source_key = f"file:{f.parent.name}/{f.name}"
+                else:
+                    source_key = f"file:{f.parent.name}/{f.name}"
             if f.suffix.lower() not in INPUT_EXTS:
                 results.append(FileResult(status=SKIPPED, src=f, rel=rel, order=order))
                 order += 1
@@ -343,14 +360,16 @@ def _main(argv: Optional[List[str]]) -> int:
             number += 1
             st = f.stat()
             stats[order] = (st.st_size, st.st_mtime_ns)
-            entry = manifest.lookup(rel, st.st_size, st.st_mtime_ns, fingerprint, dst_dir) \
+            entry = manifest.lookup(source_key, rel, st.st_size, st.st_mtime_ns, fingerprint, dst_dir) \
                 if args.resume else None
             if entry:
                 results.append(FileResult(
                     status=ALREADY_DONE, src=f, rel=rel, order=order, dst=dst_dir / entry["dst"],
-                    bytes_in=entry["bytes_in"], bytes_out=entry["bytes_out"]))
+                    bytes_in=entry["bytes_in"], bytes_out=entry["bytes_out"],
+                    source_key=source_key))
             else:
-                todo.append(Job(order=order, src=f, rel=rel, number=number))
+                todo.append(Job(order=order, src=f, rel=rel, number=number,
+                                source_key=source_key))
             order += 1
 
     if manifest.stale:
