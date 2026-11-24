@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
+from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -25,11 +27,22 @@ except ImportError:  # progress bar is optional
 DEFAULT_LOG_NAME = f"{COMMAND_NAME}.log"
 DEFAULT_MAX_EDGE = 2560
 SIZE_KEYS = ("max_edge", "width", "height", "scale")
-CONFIG_ALIASES = {"copy_jpg": "copy_same", "to": "format"}
+CONFIG_ALIASES = {"to": "format"}
 
 
 class UsageError(Exception):
     pass
+
+
+def normalize_extension(value: str) -> str:
+    """Normalize an extension filter to a case-insensitive dotted suffix."""
+    if not isinstance(value, str):
+        raise ValueError("extension must be a string")
+    extension = value.strip().casefold()
+    if (not extension or extension == "." or "/" in extension or "\\"
+            in extension or "*" in extension):
+        raise ValueError("extension must be a suffix such as .tmp or .tar.gz")
+    return extension if extension.startswith(".") else f".{extension}"
 
 
 def build_parser(suppress: bool = False) -> argparse.ArgumentParser:
@@ -48,6 +61,9 @@ def build_parser(suppress: bool = False) -> argparse.ArgumentParser:
                    help="Also include images and folders in the current directory")
     p.add_argument("--exclude", action="append", type=Path, default=[], metavar="PATH_OR_NAME",
                    help="Exclude exact paths (including folder contents) or matching names; repeat as needed")
+    p.add_argument("--exclude-extension", action="append", default=[], metavar="EXT",
+                   type=normalize_extension,
+                   help="Exclude files ending in EXT (e.g. .tmp or .tar.gz); repeat as needed")
     p.add_argument("-o", "--output", dest="output_folder", type=Path, default=None,
                    help="Output directory (default: output)")
 
@@ -62,50 +78,54 @@ def build_parser(suppress: bool = False) -> argparse.ArgumentParser:
     excl.add_argument("--height", type=int, metavar="PX",
                       help="Height becomes at most PX pixels")
     excl.add_argument("--scale", type=float, metavar="PERCENT",
-                      help="Scale both sides by PERCENT (e.g. 50 = half size)")
+                      help="Set dimensions to PERCENT of input (50 halves, 100 keeps size; above 100 needs --upscale)")
     size.add_argument("--upscale", action="store_true",
-                      help="Allow enlarging images (by default nothing is ever upscaled)")
+                      help="Allow enlarging images; required for --scale above 100")
 
     out = p.add_argument_group("output")
     out.add_argument("--format", choices=["jpg", "png", "webp", "avif"], default="jpg",
                      help="Output format (default jpg)")
     out.add_argument("--quality", type=int, default=95,
                      help="Quality 1-100 for jpg/webp/avif (default 95)")
-    out.add_argument("--lossless", action="store_true", help="Lossless WebP")
+    out.add_argument("--lossless", action="store_true",
+                     help="Use lossless WebP encoding (PNG is lossless by default)")
     out.add_argument("--target-size", default=None, metavar="SIZE",
                      help="Aim for files of at most SIZE (e.g. 500KB, 2MB) by lowering quality")
     out.add_argument("--min-quality", type=int, default=30,
-                     help="Lowest quality --target-size may use (default 30)")
+                     help="Quality floor for --target-size (default 30; ignored without --target-size)")
     out.add_argument("--strip-metadata", action="store_true",
                      help="Remove EXIF (rotation is applied first); ICC colour profile is kept")
     out.add_argument("--strip-icc", action="store_true", help="Also remove the ICC colour profile")
-    out.add_argument("--rename", default=None, metavar="TEMPLATE",
-                     help="Rename outputs, e.g. '{parent}_{n:04d}'. Fields: {name} {n} {date} "
-                          "{parent} {width} {height} {orig_ext} {format}")
+    # Temporarily disabled: custom output-name templates.
+    # out.add_argument("--rename", default=None, metavar="TEMPLATE",
+    #                  help="Rename outputs, e.g. '{parent}_{n:04d}'. Fields: {name} {n} {date} "
+    #                       "{parent} {width} {height} {orig_ext} {format}")
 
     beh = p.add_argument_group("behaviour")
     beh.add_argument("--recursive", action="store_true",
                      help="Also process sub-folders (structure is kept)")
-    beh.add_argument("--copy-same", "--copy-jpg", dest="copy_same", action="store_true",
+    beh.add_argument("--copy-same", action="store_true",
                      help="Copy files already in the output format untouched, "
-                          "even if larger than the size limit (--copy-jpg for JPG)")
+                          "even if larger than the size limit")
     beh.add_argument("--convert-only", action="store_true",
                      help="Convert format without resizing; size and quality options still apply")
     beh.add_argument("--dry-run", action="store_true",
                      help="Show what would happen; write nothing")
     beh.add_argument("--resume", action="store_true",
                      help="Skip files already processed earlier with the same options")
-    beh.add_argument("--jobs", type=int, default=1, metavar="N",
-                     help="Worker threads (default 1; 0 = all CPU cores)")
+    beh.add_argument("--workers", type=int, default=1, metavar="N",
+                     help="Number of worker threads (default 1; 0 = all CPU cores)")
 
     rep = p.add_argument_group("logs and reports")
     rep.add_argument("--log", type=Path, default=None, metavar="FILE",
-                     help=f"Log with summary and every failure + reason "
-                          f"(default: {DEFAULT_LOG_NAME} in the output folder)")
+                     help=f"Choose the log path; a log is written by default to "
+                          f"{DEFAULT_LOG_NAME} in the output folder")
     rep.add_argument("--report", type=Path, default=None, metavar="FILE",
-                     help="Write a per-file report; .json or .csv")
-    rep.add_argument("--no-progress", action="store_true", help="No progress bar / counter")
-    rep.add_argument("--quiet", action="store_true", help="Only print the summary and failures")
+                     help="Optionally write a per-file report; .json or .csv")
+    rep.add_argument("--quiet", action="store_true",
+                     help="Hide per-file details (progress remains visible)")
+    rep.add_argument("--show-setup", action="store_true",
+                     help="Print the effective setup before processing")
 
     p.add_argument("--config", type=Path, default=None, metavar="FILE",
                    help="Read default options from a TOML or JSON file")
@@ -159,11 +179,35 @@ def build_options(args: argparse.Namespace, explicit: set) -> Options:
             quality=args.quality, min_quality=args.min_quality, lossless=args.lossless,
             target_bytes=target, strip_metadata=args.strip_metadata, strip_icc=args.strip_icc,
             copy_same=args.copy_same, convert_only=args.convert_only,
-            rename=args.rename, dry_run=args.dry_run)
+            # rename=args.rename,  # Temporarily disabled with the rename-template option.
+            dry_run=args.dry_run)
         opts.validate()
     except ValueError as e:
         raise UsageError(str(e))
     return opts
+
+
+def _setup_dict(opts: Options, args: argparse.Namespace, workers: int,
+                input_paths: List[Path], dst_dir: Path, log_path: Path,
+                report_path: Optional[Path]) -> dict:
+    return {
+        **asdict(opts),
+        "recursive": args.recursive,
+        "workers": workers,
+        "quiet": args.quiet,
+        "exclude": [str(path) for path in args.exclude],
+        "exclude_extensions": list(args.exclude_extension),
+        "input": [str(path) for path in input_paths],
+        "output": str(dst_dir),
+        "log": str(log_path),
+        "report": str(report_path) if report_path else None,
+        "config": str(args.config) if args.config else None,
+    }
+
+
+def _show_setup(setup: dict) -> None:
+    print("Current setup:")
+    print(json.dumps(setup, indent=2, ensure_ascii=False))
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -184,12 +228,19 @@ def _main(argv: Optional[List[str]]) -> int:
         parser.set_defaults(**_config_defaults(parser, known.config))
 
     args = parser.parse_args(argv)
+    try:
+        extension_values = args.exclude_extension
+        if isinstance(extension_values, str):
+            extension_values = [extension_values]
+        args.exclude_extension = [normalize_extension(value) for value in extension_values]
+    except (AttributeError, TypeError, ValueError) as e:
+        raise UsageError(f"Invalid excluded extension: {e}")
     explicit = set(vars(build_parser(suppress=True).parse_args(argv)))
     opts = build_options(args, explicit)
 
-    if args.jobs < 0:
-        raise UsageError("--jobs must be 0 or more.")
-    workers = (os.cpu_count() or 1) if args.jobs == 0 else args.jobs
+    if args.workers < 0:
+        raise UsageError("--workers must be 0 or more.")
+    workers = (os.cpu_count() or 1) if args.workers == 0 else args.workers
 
     legacy_pair = (
         len(args.paths) == 2 and not args.input_paths and not args.all_inputs
@@ -204,6 +255,13 @@ def _main(argv: Optional[List[str]]) -> int:
         output_arg = args.output_folder or Path("output")
 
     if not requested_inputs and not args.all_inputs:
+        if args.show_setup:
+            output_path = output_arg.resolve()
+            log_path = (args.log or output_path / DEFAULT_LOG_NAME).resolve()
+            report_path = args.report.resolve() if args.report else None
+            _show_setup(_setup_dict(opts, args, workers, [], output_path,
+                                   log_path, report_path))
+            return 0
         parser.print_help()
         return 0
 
@@ -224,6 +282,11 @@ def _main(argv: Optional[List[str]]) -> int:
 
     def is_excluded(path: Path) -> bool:
         resolved = path.resolve()
+        if path.is_file() and any(
+            path.name.casefold().endswith(extension)
+            for extension in args.exclude_extension
+        ):
+            return True
         for exclusion, raw in zip(exclusions, args.exclude):
             if resolved == exclusion or exclusion in resolved.parents:
                 return True
@@ -242,7 +305,7 @@ def _main(argv: Optional[List[str]]) -> int:
         seen_inputs.add(resolved)
         input_paths.append(resolved)
         if is_excluded(resolved):
-            skipped_inputs.append(f"{resolved}: excluded by --exclude")
+            skipped_inputs.append(f"{resolved}: excluded by configured filters")
         elif resolved.is_dir():
             valid_inputs.append((resolved, True))
         elif resolved.is_file() and resolved.suffix.lower() in INPUT_EXTS:
@@ -282,6 +345,10 @@ def _main(argv: Optional[List[str]]) -> int:
     report_path = args.report.resolve() if args.report else None
     if report_path and report_path.suffix.lower() not in (".json", ".csv"):
         raise UsageError("--report must end in .json or .csv")
+
+    setup = _setup_dict(opts, args, workers, input_paths, dst_dir, log_path, report_path)
+    if args.show_setup:
+        _show_setup(setup)
 
     if not opts.dry_run:
         dst_dir.mkdir(parents=True, exist_ok=True)
@@ -379,9 +446,8 @@ def _main(argv: Optional[List[str]]) -> int:
     if opts.dry_run:
         print("DRY RUN - nothing will be written.\n")
 
-    show_progress = not args.no_progress and not args.quiet
     bar = tqdm(total=len(todo), unit="file") if (
-        show_progress and tqdm is not None and sys.stderr.isatty()) else None
+        tqdm is not None and sys.stderr.isatty()) else None
     counter = {"done": 0}
 
     def emit(msg: str) -> None:
@@ -390,6 +456,9 @@ def _main(argv: Optional[List[str]]) -> int:
         else:
             print(msg)
 
+    if not todo and bar is None:
+        emit("[0/0]")
+
     def on_result(res: FileResult) -> None:
         counter["done"] += 1
         results.append(res)
@@ -397,8 +466,10 @@ def _main(argv: Optional[List[str]]) -> int:
             size, mtime_ns = stats[res.order]
             manifest.record(res, size, mtime_ns, fingerprint, dst_dir)
         if not args.quiet:
-            prefix = f"[{counter['done']}/{len(todo)}] " if show_progress and bar is None else ""
+            prefix = f"[{counter['done']}/{len(todo)}] " if bar is None else ""
             emit(prefix + describe(res))
+        elif bar is None:
+            emit(f"[{counter['done']}/{len(todo)}]")
         if bar is not None:
             bar.update(1)
 
@@ -451,7 +522,7 @@ def _main(argv: Optional[List[str]]) -> int:
         if report_path is not None:
             try:
                 write_report(report_path, input_paths, dst_dir, opts, args.recursive,
-                             workers, results, started, interrupted)
+                             workers, results, started, interrupted, setup)
                 print(f"\nReport written to: {report_path}")
             except OSError as e:
                 print(f"\nCould not write report file {report_path}: {e}")
