@@ -15,9 +15,8 @@ Today it handles images. Video and audio (via FFmpeg), AI upscaling and a deskto
 - **Zero-loss copies:** a file already in the output format and within the size limit is copied byte for byte
 - **Never makes files bigger:** if the converted file would not be smaller, the original is copied instead
 - **Safe:** originals are never modified; everything goes to a separate output folder
-- **Rename templates:** `--rename "{parent}_{n:04d}"`
 - **`--dry-run`:** see exactly what would happen, including estimated sizes, without writing anything
-- **Parallel processing:** `--jobs 4`
+- **Parallel processing:** `--workers 4`
 - **Resume:** `--resume` skips files already processed
 - **Failure log:** every failed file is listed with its reason, on screen and in a log file
 - **JSON / CSV report** of every file
@@ -78,30 +77,40 @@ python -m mediasmith "D:\Photos" --recursive
 | `--all` | off | Also include images and folders in the current directory |
 | `-o`, `--output DIR` | `output` | Output directory for the flexible input form |
 | `--exclude PATH_OR_NAME` | | Exclude an exact path (including folder contents) or any matching file/folder name; repeat as needed |
+| `--exclude-extension EXT` | | Exclude files ending in this extension (e.g. `.tmp`, `.tar.gz`); repeat as needed |
 | `--max-edge PX` | 2560 | Longer side becomes at most PX pixels |
 | `--width PX` / `--height PX` | | Width / height becomes at most PX pixels |
-| `--scale PERCENT` | | Scale both sides (50 = half size) |
-| `--upscale` | off | Allow enlarging (needed for `--scale` above 100, or a larger `--max-edge` than the image) |
+| `--scale PERCENT` | | Set each dimension to this percentage of the original: below 100 shrinks, 100 keeps size, above 100 enlarges |
+| `--upscale` | off | Permit enlargement; required for `--scale` above 100 or when a resize limit would enlarge a smaller image |
 | `--format jpg\|png\|webp\|avif` | jpg | Output format |
 | `--quality N` | 95 | Quality 1-100 for jpg / webp / avif |
-| `--lossless` | off | Lossless WebP |
+| `--lossless` | off | Use lossless WebP encoding; PNG is inherently lossless, and this option is WebP-only |
 | `--target-size SIZE` | | Aim for at most SIZE (e.g. `500KB`, `2MB`) by lowering quality |
-| `--min-quality N` | 30 | Lowest quality `--target-size` may use |
+| `--min-quality N` | 30 | Quality floor when finding a quality that fits `--target-size`; ignored otherwise |
 | `--strip-metadata` | off | Remove EXIF (ICC colour profile kept) |
 | `--strip-icc` | off | Also remove the ICC colour profile |
-| `--rename TEMPLATE` | | Rename outputs. Fields: `{name} {n} {date} {parent} {width} {height} {orig_ext} {format}` |
 | `--recursive` | off | Also process sub-folders, keeping the structure |
-| `--copy-same` (`--copy-jpg`) | off | Copy files already in the output format untouched, even if larger than the limit |
+| `--copy-same` | off | Copy files already in the output format untouched, even if larger than the limit |
 | `--convert-only` | off | Convert formats without resizing; `--quality` and `--target-size` still apply |
 | `--dry-run` | off | Show what would happen; write nothing |
 | `--resume` | off | Skip files already processed with the same options |
-| `--jobs N` | 1 | Worker threads (0 = all CPU cores) |
-| `--log FILE` | `mediasmith.log` in output | Log with summary and every failure + reason |
-| `--report FILE` | | Per-file report, `.json` or `.csv` |
+| `--workers N` | 1 | Worker threads (0 = all CPU cores) |
+| `--log FILE` | `mediasmith.log` in output | Human-readable run summary and failures |
+| `--report FILE` | | Per-file report (`.json` or `.csv`); JSON includes the complete effective setup |
 | `--config FILE` | | Read default options from a TOML or JSON file |
-| `--no-progress`, `--quiet` | | Hide the progress bar / per-file lines |
+| `--quiet` | | Hide per-file details; progress remains visible |
+| `--show-setup` | | Print the effective setup before processing |
 
 Only one of `--max-edge`, `--width`, `--height`, `--scale` can be used at a time.
+`--scale 50` makes each dimension half as large. `--scale 100` keeps the original size;
+values above 100 require `--upscale`. Without `--upscale`, resize modes never enlarge images.
+`--min-quality` sets the lowest encoder quality allowed while `--target-size` searches for a
+quality that fits the requested size. If that floor is reached before the target is met, the
+result can remain larger than the target. Without `--target-size`, `--min-quality` has no effect.
+`--log` is the path override for the text log, which is already written by default (except in
+dry runs). `--report` is different: it opts into a per-file CSV or JSON report; no such report
+is written by default. The hidden `.mediasmith-manifest.jsonl` file is resume bookkeeping, not
+a report.
 
 ### Examples
 
@@ -116,7 +125,7 @@ mediasmith -i ./wallpapers ./photos -o ./processed --recursive
 mediasmith ./photo.png --output ./converted --convert-only
 
 # Half size, WebP, sub-folders, 4 threads
-mediasmith ./photos ./photos_small --scale 50 --format webp --recursive --jobs 4
+mediasmith ./photos ./photos_small --scale 50 --format webp --recursive --workers 4
 
 # Every file at most 500 KB, EXIF removed
 mediasmith ./photos ./web --target-size 500KB --strip-metadata
@@ -126,10 +135,7 @@ mediasmith ./photos ./out --dry-run
 mediasmith ./photos ./out --report ./out/report.csv
 
 # Large collection: safe to stop with Ctrl-C and continue later
-mediasmith ./photos ./out --recursive --jobs 0 --resume
-
-# Numbered names: wall_001.jpg, wall_002.jpg ...
-mediasmith ./photos ./out --rename "wall_{n:03d}"
+mediasmith ./photos ./out --recursive --workers 0 --resume
 ```
 
 ### Config file
@@ -142,7 +148,7 @@ max-edge = 1920
 quality = 92
 format = "webp"
 recursive = true
-jobs = 4
+workers = 4
 strip-metadata = true
 ```
 
@@ -208,7 +214,7 @@ pytest
 - [x] Flexible file/folder inputs
 - [x] Resize, quality, format and target-size controls
 - [x] Dry-run, resume, parallel processing and reports
-- [x] Configuration, exclusions and rename templates
+- [x] Configuration and exclusions
 - [x] Packaging and automated tests
 
 ### Next
@@ -218,9 +224,9 @@ pytest
 - [ ] Thumbnail previews
 - [ ] Preserve directory metadata
 - [ ] Plugin or FFmpeg support for video and audio
-- [ ] Optional AI upscaling
-- [ ] Desktop GUI
-- [ ] Android app
+- [ ] Upscaling
+- [ ] Desktop GUI (?)
+- [ ] Android app (?)
 
 ## Contributing
 
