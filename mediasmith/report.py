@@ -114,9 +114,9 @@ def record_dict(r: FileResult) -> dict:
     }
 
 
-def describe_options(opts: Options, jobs: int) -> str:
+def describe_options(opts: Options, workers: int) -> str:
     d = asdict(opts)
-    d["jobs"] = jobs
+    d["workers"] = workers
     return " ".join(
         f"{k}={v}" for k, v in d.items()
         if v not in (None, False)
@@ -124,7 +124,7 @@ def describe_options(opts: Options, jobs: int) -> str:
 
 
 def write_log(log_path: Path, src_dirs: List[Path], dst_dir: Path, opts: Options, recursive: bool,
-              jobs: int, results: List[FileResult], started: datetime,
+              workers: int, results: List[FileResult], started: datetime,
               interrupted: bool, skipped_inputs: Optional[List[str]] = None,
               empty_directories: Optional[List[Path]] = None,
               skipped_directories: Optional[List[Path]] = None) -> None:
@@ -143,7 +143,7 @@ def write_log(log_path: Path, src_dirs: List[Path], dst_dir: Path, opts: Options
         *(input_folders or ["  None"]),
         f"Recursive: {recursive}",
         f"Output  : {_display_path(dst_dir)}",
-        f"Options : {describe_options(opts, jobs)}",
+        f"Options : {describe_options(opts, workers)}",
     ]
     if skipped_inputs:
         lines += ["", f"--- Skipped input paths ({len(skipped_inputs)}) ---"]
@@ -167,8 +167,8 @@ def write_log(log_path: Path, src_dirs: List[Path], dst_dir: Path, opts: Options
 
 
 def write_report(path: Path, src_dirs: List[Path], dst_dir: Path, opts: Options, recursive: bool,
-                 jobs: int, results: List[FileResult], started: datetime,
-                 interrupted: bool) -> None:
+                 workers: int, results: List[FileResult], started: datetime,
+                 interrupted: bool, setup: dict) -> None:
     """JSON (summary + options + every file) or CSV (every file), chosen by extension."""
     path.parent.mkdir(parents=True, exist_ok=True)
     records = [record_dict(r) for r in results if r.status != SKIPPED]
@@ -186,7 +186,8 @@ def write_report(path: Path, src_dirs: List[Path], dst_dir: Path, opts: Options,
         "interrupted": interrupted,
         "input": str(src_dirs[0]) if len(src_dirs) == 1 else [str(p) for p in src_dirs],
         "output": str(dst_dir),
-        "options": {**asdict(opts), "recursive": recursive, "jobs": jobs},
+        "options": {**asdict(opts), "recursive": recursive, "workers": workers},
+        "setup": setup,
         "summary": summary_dict(results),
         "files": records,
     }
