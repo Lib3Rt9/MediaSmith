@@ -12,8 +12,7 @@ What it does
 - Existing JPGs:
     * already within the size limit -> copied byte-for-byte (zero loss);
                                        .jfif/.jpe files are renamed to .jpg
-    * larger than the limit         -> resized and re-saved (use --copy-jpg to copy
-                                       ALL existing JPGs untouched instead)
+    * larger than the limit         -> resized and re-saved
 - If the converted file would NOT be smaller than the original, the original is
   copied unchanged instead (no bigger files, no needless quality loss).
 - Output goes to a separate folder; the originals are never modified.
@@ -24,7 +23,6 @@ Optional (HEIC/HEIF input):  pip install pillow-heif
 Usage:
     python wallpaper_to_jpg.py INPUT_FOLDER OUTPUT_FOLDER
     python wallpaper_to_jpg.py INPUT_FOLDER OUTPUT_FOLDER --max-edge 1920 --recursive
-    python wallpaper_to_jpg.py INPUT_FOLDER OUTPUT_FOLDER --copy-jpg
 """
 
 import argparse
@@ -124,8 +122,6 @@ def main() -> int:
                    help="JPEG quality 1-100 (default 95)")
     p.add_argument("--recursive", action="store_true",
                    help="Also process sub-folders (structure is kept)")
-    p.add_argument("--copy-jpg", action="store_true",
-                   help="Copy ALL existing JPGs untouched, even if larger than --max-edge")
     args = p.parse_args()
 
     src_dir = args.input_folder.resolve()
@@ -161,13 +157,10 @@ def main() -> int:
             if ext in JPEG_EXTS:
                 # Decide: copy untouched, or resize because it's too large
                 needs_resize = False
-                if not args.copy_jpg:
-                    with Image.open(f) as im:
-                        needs_resize = max(im.size) > args.max_edge
+                with Image.open(f) as im:
+                    needs_resize = max(im.size) > args.max_edge
 
                 if not needs_resize:
-                    # .jfif / .jpe are plain JPEG data with an unusual extension:
-                    # copy byte-for-byte but save as .jpg for universal compatibility.
                     out_name = f.stem + ".jpg" if ext in {".jfif", ".jpe"} else f.name
                     target = unique_path(out_dir / out_name)
                     shutil.copy2(f, target)
