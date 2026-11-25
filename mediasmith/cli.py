@@ -83,12 +83,10 @@ def build_parser(suppress: bool = False) -> argparse.ArgumentParser:
                       help="Allow enlarging images; required for --scale above 100")
 
     out = p.add_argument_group("output")
-    out.add_argument("--format", choices=["jpg", "png", "webp", "avif"], default="jpg",
+    out.add_argument("--format", choices=["jpg", "png", "webp", "webp-lossless", "avif"], default="jpg",
                      help="Output format (default jpg)")
     out.add_argument("--quality", type=int, default=95,
                      help="Quality 1-100 for jpg/webp/avif (default 95)")
-    out.add_argument("--lossless", action="store_true",
-                     help="Use lossless WebP encoding (PNG is lossless by default)")
     out.add_argument("--target-size", default=None, metavar="SIZE",
                      help="Aim for files of at most SIZE (e.g. 500KB, 2MB) by lowering quality")
     out.add_argument("--min-quality", type=int, default=30,
@@ -176,7 +174,8 @@ def build_options(args: argparse.Namespace, explicit: set) -> Options:
         target = parse_size(args.target_size) if args.target_size is not None else None
         opts = Options(
             fmt=args.format, resize_mode=key, resize_value=value, upscale=args.upscale,
-            quality=args.quality, min_quality=args.min_quality, lossless=args.lossless,
+            quality=args.quality, min_quality=args.min_quality,
+            lossless=getattr(args, "lossless", False),
             target_bytes=target, strip_metadata=args.strip_metadata, strip_icc=args.strip_icc,
             copy_same=args.copy_same, convert_only=args.convert_only,
             # rename=args.rename,  # Temporarily disabled with the rename-template option.

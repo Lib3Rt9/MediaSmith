@@ -76,6 +76,8 @@ FORMATS: Dict[str, FormatInfo] = {
     "jpg": FormatInfo("jpg", ".jpg", "JPEG", True, False, frozenset(JPEG_EXTS)),
     "png": FormatInfo("png", ".png", "PNG", False, True, frozenset({".png"})),
     "webp": FormatInfo("webp", ".webp", "WEBP", True, True, frozenset({".webp"})),
+    "webp-lossless": FormatInfo("webp-lossless", ".webp", "WEBP", False, True,
+                                frozenset({".webp"})),
     "avif": FormatInfo("avif", ".avif", "AVIF", True, True, frozenset({".avif"})),
 }
 
@@ -144,15 +146,15 @@ class Options:
             raise ValueError("--quality must be between 1 and 100.")
         if not 1 <= self.min_quality <= 100:
             raise ValueError("--min-quality must be between 1 and 100.")
-        if self.lossless and self.fmt != "webp":
+        if self.lossless and self.fmt not in ("webp", "webp-lossless"):
             raise ValueError("--lossless only applies to --format webp "
-                             "(use --format png for lossless output).")
+                             "(use --format webp-lossless or --format png).")
         if self.target_bytes is not None:
             if self.target_bytes <= 0:
                 raise ValueError("--target-size must be greater than 0.")
             if not FORMATS[self.fmt].lossy or self.lossless:
                 raise ValueError("--target-size needs a lossy format "
-                                 "(jpg, webp without --lossless, or avif).")
+                                 "(jpg, webp, or avif).")
         # if self.rename:
         #     check_template(self.rename)
         if self.fmt == "avif" and not avif_supported():
@@ -307,8 +309,8 @@ def encode(img: Image.Image, info: FormatInfo, opts: Options, quality: int,
         kw.update(quality=quality, subsampling=0, optimize=True, progressive=True)  # 4:4:4
     elif info.key == "png":
         kw.update(optimize=True)
-    elif info.key == "webp":
-        if opts.lossless:
+    elif info.key in ("webp", "webp-lossless"):
+        if opts.lossless or info.key == "webp-lossless":
             kw.update(lossless=True, quality=100, method=6)
         else:
             kw.update(quality=quality, method=4)

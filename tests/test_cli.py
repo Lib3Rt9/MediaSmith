@@ -81,10 +81,26 @@ def test_quiet_keeps_progress_but_hides_per_file_details(folders, capsys):
     assert "[CONVERT]" not in output and "[KEEP]" not in output and "[COPY]" not in output
 
 
-@pytest.mark.parametrize("option", ["--no-progress", "--copy-jpg", "--jobs", "--rename"])
+@pytest.mark.parametrize("option", ["--no-progress", "--copy-jpg", "--jobs", "--rename", "--lossless"])
 def test_removed_options_are_rejected(option):
     with pytest.raises(SystemExit):
         build_parser().parse_args([option])
+
+
+def test_webp_lossless_format(tmp_path):
+    source = tmp_path / "source.png"
+    output = tmp_path / "output"
+    Image.new("RGB", (20, 20), "red").save(source)
+
+    assert main([str(source), "--output", str(output), "--format", "webp",
+                 "--quiet"]) == 0
+    assert (output / "source.webp").is_file()
+
+    lossy_output = output / "lossless"
+    assert main([str(source), "--output", str(lossy_output), "--format", "webp-lossless",
+                 "--quiet"]) == 0
+    assert (lossy_output / "source.webp").is_file()
+    assert (output / "source.webp").is_file()
 
 
 def test_csv_report(folders):

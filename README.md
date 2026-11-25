@@ -82,9 +82,8 @@ python -m mediasmith "D:\Photos" --recursive
 | `--width PX` / `--height PX` | | Width / height becomes at most PX pixels |
 | `--scale PERCENT` | | Set each dimension to this percentage of the original: below 100 shrinks, 100 keeps size, above 100 enlarges |
 | `--upscale` | off | Permit enlargement; required for `--scale` above 100 or when a resize limit would enlarge a smaller image |
-| `--format jpg\|png\|webp\|avif` | jpg | Output format |
-| `--quality N` | 95 | Quality 1-100 for jpg / webp / avif |
-| `--lossless` | off | Use lossless WebP encoding; PNG is inherently lossless, and this option is WebP-only |
+| `--format jpg\|png\|webp\|webp-lossless\|avif` | jpg | Output format |
+| `--quality N` | 95 | Quality 1-100 for jpg / webp / avif; ignored by `webp-lossless` |
 | `--target-size SIZE` | | Aim for at most SIZE (e.g. `500KB`, `2MB`) by lowering quality |
 | `--min-quality N` | 30 | Quality floor when finding a quality that fits `--target-size`; ignored otherwise |
 | `--strip-metadata` | off | Remove EXIF (ICC colour profile kept) |
