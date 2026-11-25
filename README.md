@@ -158,7 +158,21 @@ TOML needs Python 3.11+ or `pip install tomli` (installed automatically with the
 
 ### Resume
 
-Finished files are recorded in `.mediasmith-manifest.jsonl` inside the output folder, one line per file as soon as it is done. With `--resume` a file is skipped when its source is unchanged, it was processed with the same options, and its output still exists. Failed files are retried. If you change options, use a fresh output folder to avoid duplicates.
+Use `--resume` to continue an interrupted run or avoid processing the same files again:
+
+```bash
+mediasmith ./photos -o ./processed --recursive --resume
+```
+
+`--resume` reuses the requested output folder instead of creating `processed_1`, `processed_2`, and so on. It writes one line to `.mediasmith-manifest.jsonl` in that folder as soon as each file finishes.
+
+On the next run with `--resume`, MediaSmith skips a file only when all of these are true:
+
+- the source file has the same size and modification time,
+- the output file from the earlier run still exists,
+- the processing options are unchanged.
+
+Files that failed are retried. Use a fresh output folder when processing options change (for example, a new format, quality, size, or metadata setting). This keeps old and new results separate and avoids duplicate output names.
 
 ### Reading the result
 
