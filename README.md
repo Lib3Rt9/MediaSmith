@@ -225,8 +225,6 @@ pytest
 - [ ] Preserve directory metadata
 - [ ] Plugin or FFmpeg support for video and audio
 - [ ] Upscaling
-- [ ] Desktop GUI (?)
-- [ ] Android app (?)
 
 ## Contributing
 
