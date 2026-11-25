@@ -13,8 +13,8 @@ from typing import Dict, List, Optional, Tuple
 
 from . import __version__
 from .config import ConfigError, load_config
-from .core import (ALREADY_DONE, INPUT_EXTS, SIZE_STATUSES, SKIPPED, Context, FileResult,
-                   Job, Options, PathReserver, parse_size, run_jobs)
+from .core import (ALREADY_DONE, INPUT_EXTS, OUTPUT_FORMATS, SIZE_STATUSES, SKIPPED, Context,
+                   FileResult, Job, Options, PathReserver, parse_size, run_jobs)
 from .identity import COMMAND_NAME
 from .report import describe, failure_lines, summarize, write_log, write_report
 from .resume import MANIFEST_NAME, Manifest
@@ -83,10 +83,10 @@ def build_parser(suppress: bool = False) -> argparse.ArgumentParser:
                       help="Allow enlarging images; required for --scale above 100")
 
     out = p.add_argument_group("output")
-    out.add_argument("--format", choices=["jpg", "png", "webp", "webp-lossless", "avif"], default="jpg",
+    out.add_argument("--format", choices=OUTPUT_FORMATS, default="jpg",
                      help="Output format (default jpg)")
     out.add_argument("--quality", type=int, default=95,
-                     help="Quality 1-100 for jpg/webp/avif (default 95)")
+                     help="Quality 1-100 for jpg/webp/heic/heif/avif (default 95)")
     out.add_argument("--target-size", default=None, metavar="SIZE",
                      help="Aim for files of at most SIZE (e.g. 500KB, 2MB) by lowering quality")
     out.add_argument("--min-quality", type=int, default=30,

@@ -6,8 +6,7 @@ Today it handles images. Video and audio (via FFmpeg) are planned, see the [Road
 
 ## Features
 
-- **Many input formats:** JPG, JPEG, JFIF, PNG, WebP, TIFF, BMP, GIF, AVIF, HEIC/HEIF (AVIF and HEIC need support installed, see below)
-- **Output formats:** JPG (default), PNG, WebP (lossy or lossless), AVIF
+- **Supported formats (input and output):** JPG/JPEG/JFIF/JPE, PNG, BMP, TIF/TIFF, WebP, GIF, HEIC/HEIF, AVIF (HEIC/HEIF and AVIF require encoder support; see below)
 - **High-quality JPG:** quality 95, 4:4:4 chroma (full colour detail), optimised encoding
 - **Resize modes:** longest edge, width, height or percentage. Nothing is ever enlarged unless you pass `--upscale`
 - **Target file size:** `--target-size 500KB` finds the highest quality that fits
@@ -34,10 +33,10 @@ update the `[project.scripts]` command there as well; the import package can sta
 
 ```bash
 pip install .                # from a clone of this repo
-pip install ".[all]"         # + HEIC input, AVIF output, progress bar
+pip install ".[all]"         # + HEIC/HEIF input and output, AVIF output, progress bar
 ```
 
-Optional extras: `heic` (pillow-heif), `avif` (pillow-avif-plugin; recent Pillow versions can write AVIF natively), `progress` (tqdm).
+Optional extras: `heic` (pillow-heif for HEIC/HEIF input and output), `avif` (pillow-avif-plugin; recent Pillow versions can write AVIF natively), `progress` (tqdm).
 
 After installing, run `mediasmith ...`. From the repository folder you can also use
 `python -m mediasmith ...`; `python media ...` does not work because there is no `media.py`
@@ -82,8 +81,8 @@ python -m mediasmith "D:\Photos" --recursive
 | `--width PX` / `--height PX` | | Width / height becomes at most PX pixels |
 | `--scale PERCENT` | | Set each dimension to this percentage of the original: below 100 shrinks, 100 keeps size, above 100 enlarges |
 | `--upscale` | off | Permit enlargement; required for `--scale` above 100 or when a resize limit would enlarge a smaller image |
-| `--format jpg\|png\|webp\|webp-lossless\|avif` | jpg | Output format |
-| `--quality N` | 95 | Quality 1-100 for jpg / webp / avif; ignored by `webp-lossless` |
+| `--format jpg\|jpeg\|jfif\|jpe\|png\|bmp\|tif\|tiff\|webp\|webp-lossless\|gif\|heic\|heif\|avif` | jpg | Output format; HEIC/HEIF and AVIF require encoder support |
+| `--quality N` | 95 | Quality 1-100 for JPG / WebP / HEIC / AVIF; ignored by lossless formats and `webp-lossless` |
 | `--target-size SIZE` | | Aim for at most SIZE (e.g. `500KB`, `2MB`) by lowering quality |
 | `--min-quality N` | 30 | Quality floor when finding a quality that fits `--target-size`; ignored otherwise |
 | `--strip-metadata` | off | Remove EXIF (ICC colour profile kept) |
@@ -173,16 +172,16 @@ Finished files are recorded in `.mediasmith-manifest.jsonl` inside the output fo
 | Other format (PNG, WebP, TIFF, BMP, GIF, HEIC...) | Resized if needed and saved in the output format |
 | Already in the output format, within the size limit | Copied untouched |
 | Already in the output format, larger than the limit | Resized and re-saved (or copied with `--copy-same`) |
-| `.jfif` / `.jpe` | Same as JPG, saved with a `.jpg` extension |
+| `.jfif` / `.jpe` | JPEG aliases; copied with the selected JPEG suffix or normalized to `.jpg` by default |
 | Result not smaller than the original | Original copied instead |
-| Transparent image to JPG | Flattened onto white (PNG, WebP and AVIF keep transparency) |
+| Transparent image to JPG or BMP | Flattened onto white (PNG, WebP, TIFF, HEIC/HEIF and AVIF keep transparency) |
 | Animated GIF / WebP | Only the first frame is converted |
 
 Resizing uses the Lanczos filter. Note that `--strip-metadata`, `--strip-icc` and `--target-size` always re-encode, so a JPG that would otherwise be copied untouched gets re-saved.
 
 ## A note on quality
 
-JPEG, WebP lossy and AVIF are lossy formats, so converting from another format can never be truly lossless. JPG quality 95 with 4:4:4 chroma is visually indistinguishable from the original for most images and is a good balance for archiving. WebP lossy is limited to 4:2:0 chroma; JPG is the most compatible choice. Re-encoding an already low-quality JPG never improves it, which is why the tool keeps the original when the new file would be bigger. HEIC is supported as input only.
+JPEG, lossy WebP, HEIC/HEIF and AVIF are lossy formats, so converting from another format can never be truly lossless. JPG quality 95 with 4:4:4 chroma is visually indistinguishable from the original for most images and is a good balance for archiving. WebP lossy is limited to 4:2:0 chroma; JPG is the most compatible choice. Re-encoding an already low-quality JPG never improves it, which is why the tool keeps the original when the new file would be bigger.
 
 ## Library use
 

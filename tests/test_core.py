@@ -1,10 +1,13 @@
+from io import BytesIO
 from pathlib import Path
 
 import pytest
 from PIL import Image
 
-from mediasmith.core import (CONVERTED, COPIED, ERROR, KEPT_ORIGINAL, SKIPPED, Context, Job,
-                             Options, PathReserver, compute_size, parse_size, process_file)
+from mediasmith.core import (CONVERTED, COPIED, ERROR, FORMATS, INPUT_EXTS, KEPT_ORIGINAL,
+                             OUTPUT_FORMATS, SKIPPED, Context, Job, Options, PathReserver,
+                             compute_size, encode, heif_supported, parse_size, prepare,
+                             process_file)
 
 from conftest import make_noise, make_smooth
 
@@ -65,6 +68,43 @@ def test_invalid_options(kwargs):
 def test_fingerprint_ignores_dry_run_but_not_settings():
     assert Options().fingerprint() == Options(dry_run=True).fingerprint()
     assert Options().fingerprint() != Options(quality=90).fingerprint()
+
+
+def test_output_extensions_match_supported_input_extensions():
+    output_exts = {FORMATS[fmt].ext for fmt in OUTPUT_FORMATS}
+    assert output_exts == INPUT_EXTS
+
+
+@pytest.mark.parametrize("fmt,pil_format", [
+    ("bmp", "BMP"),
+    ("tif", "TIFF"),
+    ("gif", "GIF"),
+    ("heic", "HEIF"),
+    ("avif", "AVIF"),
+])
+def test_added_output_formats_encode(fmt, pil_format):
+    if fmt in ("heic", "heif") and not heif_supported():
+        pytest.skip("pillow-heif is not installed")
+    if fmt == "avif":
+        from mediasmith.core import avif_supported
+        if not avif_supported():
+            pytest.skip("AVIF encoder is not available")
+
+    opts = Options(fmt=fmt, quality=80)
+    info = FORMATS[fmt]
+    image = prepare(Image.new("RGB", (32, 32), (20, 120, 220)), info)
+    data = encode(image, info, opts, opts.quality, None, None)
+    with Image.open(BytesIO(data)) as result:
+        assert result.format == pil_format
+
+
+@pytest.mark.parametrize("fmt", ["jpeg", "jfif", "jpe"])
+def test_jpeg_alias_copy_uses_selected_output_extension(tmp_path, fmt):
+    src = make_noise(tmp_path / "source.jpg", (100, 100), fmt="JPEG")
+    res = run(src, tmp_path / "out", Options(fmt=fmt, copy_same=True))
+    assert res.status == COPIED
+    assert res.dst.suffix == FORMATS[fmt].ext
+    assert res.dst.read_bytes() == src.read_bytes()
 
 
 # ---- processing ----------------------------------------------------------- #

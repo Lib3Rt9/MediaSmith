@@ -74,17 +74,32 @@ class FormatInfo:
 
 FORMATS: Dict[str, FormatInfo] = {
     "jpg": FormatInfo("jpg", ".jpg", "JPEG", True, False, frozenset(JPEG_EXTS)),
+    "jpeg": FormatInfo("jpg", ".jpeg", "JPEG", True, False, frozenset(JPEG_EXTS)),
+    "jfif": FormatInfo("jpg", ".jfif", "JPEG", True, False, frozenset(JPEG_EXTS)),
+    "jpe": FormatInfo("jpg", ".jpe", "JPEG", True, False, frozenset(JPEG_EXTS)),
     "png": FormatInfo("png", ".png", "PNG", False, True, frozenset({".png"})),
+    "bmp": FormatInfo("bmp", ".bmp", "BMP", False, False, frozenset({".bmp"})),
+    "tif": FormatInfo("tiff", ".tif", "TIFF", False, True, frozenset({".tif", ".tiff"})),
+    "tiff": FormatInfo("tiff", ".tiff", "TIFF", False, True, frozenset({".tif", ".tiff"})),
     "webp": FormatInfo("webp", ".webp", "WEBP", True, True, frozenset({".webp"})),
     "webp-lossless": FormatInfo("webp-lossless", ".webp", "WEBP", False, True,
                                 frozenset({".webp"})),
+    "gif": FormatInfo("gif", ".gif", "GIF", False, True, frozenset({".gif"})),
+    "heic": FormatInfo("heif", ".heic", "HEIF", True, True, frozenset({".heic", ".heif"})),
+    "heif": FormatInfo("heif", ".heif", "HEIF", True, True, frozenset({".heic", ".heif"})),
     "avif": FormatInfo("avif", ".avif", "AVIF", True, True, frozenset({".avif"})),
 }
+OUTPUT_FORMATS = tuple(FORMATS)
 
 
 def avif_supported() -> bool:
     Image.init()
     return "AVIF" in Image.SAVE
+
+
+def heif_supported() -> bool:
+    Image.init()
+    return "HEIF" in Image.SAVE
 
 
 # --------------------------------------------------------------------------- #
@@ -154,9 +169,11 @@ class Options:
                 raise ValueError("--target-size must be greater than 0.")
             if not FORMATS[self.fmt].lossy or self.lossless:
                 raise ValueError("--target-size needs a lossy format "
-                                 "(jpg, webp, or avif).")
+                                 "(jpg, webp, heic, heif, or avif).")
         # if self.rename:
         #     check_template(self.rename)
+        if self.fmt in ("heic", "heif") and not heif_supported():
+            raise ValueError("HEIC/HEIF output is not available: install pillow-heif.")
         if self.fmt == "avif" and not avif_supported():
             raise ValueError("AVIF output is not available: use a recent Pillow "
                              "or run `pip install pillow-avif-plugin`.")
@@ -316,6 +333,8 @@ def encode(img: Image.Image, info: FormatInfo, opts: Options, quality: int,
             kw.update(quality=quality, method=4)
     elif info.key == "avif":
         kw.update(quality=quality)
+    elif info.key == "heif":
+        kw.update(quality=quality)
     if icc:
         kw["icc_profile"] = icc
     if exif:
@@ -408,9 +427,9 @@ def make_stem(job: Job, ctx: Context, size: Optional[Tuple[int, int]]) -> str:
 
 
 def _copy_original(job: Job, ctx: Context, res: FileResult, out_dir: Path,
-                   status: str, src_bytes: int) -> FileResult:
+                   status: str, src_bytes: int, output_ext: Optional[str] = None) -> FileResult:
     ext = job.src.suffix.lower()
-    out_ext = ".jpg" if ext in RENAME_EXTS else job.src.suffix
+    out_ext = output_ext or (".jpg" if ext in RENAME_EXTS else job.src.suffix)
     stem = make_stem(job, ctx, res.old_size)
     dst = ctx.reserver.reserve(out_dir / (stem + out_ext))
     if not ctx.opts.dry_run:
@@ -454,7 +473,8 @@ def process_file(job: Job, ctx: Context) -> FileResult:
         )
         if passthrough:
             res.new_size = res.old_size
-            return _copy_original(job, ctx, res, out_dir, COPIED, src_bytes)
+            output_ext = (info.ext if ext != info.ext or ext in RENAME_EXTS else None)
+            return _copy_original(job, ctx, res, out_dir, COPIED, src_bytes, output_ext)
 
         data, res.old_size, res.new_size, res.quality, res.target_met = render(src, opts, info)
 
