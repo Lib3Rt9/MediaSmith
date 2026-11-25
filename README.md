@@ -2,7 +2,7 @@
 
 A Python command-line tool (and library) that shrinks and converts big image collections (wallpapers, photos, digital art, scans) for archiving, while keeping visual quality as close to the original as possible.
 
-Today it handles images. Video and audio (via FFmpeg), upscaling and a desktop app are planned, see the [Roadmap](#roadmap).
+Today it handles images. Video and audio (via FFmpeg) are planned, see the [Roadmap](#roadmap).
 
 ## Features
 
